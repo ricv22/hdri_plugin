@@ -1,0 +1,606 @@
+bl_info = {
+    "name": "Photo → HDRI World (API)",
+    "author": "Cursor AI",
+    "version": (0, 1, 3),
+    "blender": (3, 6, 0),
+    "location": "View3D > Sidebar > HDRI",
+    "description": "Upload a photo to an API, get a 2:1 HDRI (.hdr/.exr), apply to World lighting (Cycles).",
+    "category": "Lighting",
+}
+
+import base64
+import json
+import os
+import tempfile
+import urllib.request
+import urllib.error
+
+import bpy
+from bpy.props import (
+    BoolProperty,
+    EnumProperty,
+    FloatProperty,
+    IntProperty,
+    PointerProperty,
+    StringProperty,
+)
+from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
+
+
+def _addon_prefs():
+    return bpy.context.preferences.addons[__name__].preferences
+
+
+def _set_env_image_colorspace(img: bpy.types.Image):
+    """Pick a valid scene/linear colorspace (Blender 4.x removed the old name 'Linear')."""
+    for name in (
+        "Linear Rec.709",
+        "scene_linear",
+        "Non-Color",
+        "Linear CIE-XYZ D65",
+    ):
+        try:
+            img.colorspace_settings.name = name
+            return
+        except Exception:
+            continue
+
+
+def _ensure_world_nodes(world: bpy.types.World):
+    world.use_nodes = True
+    nt = world.node_tree
+    nodes = nt.nodes
+    links = nt.links
+
+    out = next((n for n in nodes if n.type == "OUTPUT_WORLD"), None)
+    if out is None:
+        out = nodes.new("ShaderNodeOutputWorld")
+        out.location = (400, 0)
+
+    bg = next((n for n in nodes if n.type == "BACKGROUND"), None)
+    if bg is None:
+        bg = nodes.new("ShaderNodeBackground")
+        bg.location = (150, 0)
+
+    if not bg.outputs["Background"].is_linked:
+        links.new(bg.outputs["Background"], out.inputs["Surface"])
+
+    env = next((n for n in nodes if n.bl_idname == "ShaderNodeTexEnvironment"), None)
+    if env is None:
+        env = nodes.new("ShaderNodeTexEnvironment")
+        env.location = (-350, 0)
+
+    mapping = next((n for n in nodes if n.bl_idname == "ShaderNodeMapping"), None)
+    if mapping is None:
+        mapping = nodes.new("ShaderNodeMapping")
+        mapping.location = (-650, 0)
+
+    texcoord = next((n for n in nodes if n.bl_idname == "ShaderNodeTexCoord"), None)
+    if texcoord is None:
+        texcoord = nodes.new("ShaderNodeTexCoord")
+        texcoord.location = (-850, 0)
+
+    if not mapping.inputs["Vector"].is_linked:
+        links.new(texcoord.outputs["Generated"], mapping.inputs["Vector"])
+    if not env.inputs["Vector"].is_linked:
+        links.new(mapping.outputs["Vector"], env.inputs["Vector"])
+    if not bg.inputs["Color"].is_linked:
+        links.new(env.outputs["Color"], bg.inputs["Color"])
+
+    return {"nt": nt, "env": env, "bg": bg, "mapping": mapping}
+
+
+def _ensure_cycles():
+    scene = bpy.context.scene
+    if scene.render.engine != "CYCLES":
+        scene.render.engine = "CYCLES"
+
+
+def _ensure_preview_sphere(name="HDRI_PreviewSphere"):
+    obj = bpy.data.objects.get(name)
+    if obj and obj.type == "MESH":
+        return obj
+
+    mesh = bpy.data.meshes.new(name + "_Mesh")
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+
+    bm = None
+    try:
+        import bmesh
+
+        bm = bmesh.new()
+        bmesh.ops.create_uvsphere(bm, u_segments=64, v_segments=32, radius=1.0)
+        bm.to_mesh(mesh)
+    finally:
+        if bm:
+            bm.free()
+
+    obj.location = (0, 0, 1)
+
+    mat = bpy.data.materials.get(name + "_Mat")
+    if mat is None:
+        mat = bpy.data.materials.new(name + "_Mat")
+        mat.use_nodes = True
+        nt = mat.node_tree
+        nodes = nt.nodes
+        links = nt.links
+
+        bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None:
+            bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        bsdf.inputs["Metallic"].default_value = 1.0
+        bsdf.inputs["Roughness"].default_value = 0.0
+
+        out = next((n for n in nodes if n.type == "OUTPUT_MATERIAL"), None)
+        if out is None:
+            out = nodes.new("ShaderNodeOutputMaterial")
+        if not bsdf.outputs["BSDF"].is_linked:
+            links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+
+    if obj.data.materials:
+        obj.data.materials[0] = mat
+    else:
+        obj.data.materials.append(mat)
+
+    return obj
+
+
+def _http_post_json(url: str, payload: dict, headers: dict, timeout_s: int):
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        data = resp.read()
+        return json.loads(data.decode("utf-8"))
+
+
+def _http_get_json(url: str, headers: dict, timeout_s: int):
+    req = urllib.request.Request(url, method="GET")
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _download_bytes(url: str, headers: dict, timeout_s: int):
+    req = urllib.request.Request(url, method="GET")
+    for k, v in (headers or {}).items():
+        if v:
+            req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return resp.read()
+
+
+class HDRI_API_Preferences(AddonPreferences):
+    bl_idname = __name__
+
+    api_base_url: StringProperty(
+        name="API Base URL",
+        description="HDRI API root (no trailing slash), e.g. http://127.0.0.1:8000 — must match where uvicorn runs",
+        default="http://127.0.0.1:8000",
+    )
+    api_key: StringProperty(
+        name="API Key (optional)",
+        description="Sent as Authorization: Bearer <key>",
+        default="",
+        subtype="PASSWORD",
+    )
+    timeout_s: FloatProperty(
+        name="Timeout (seconds)",
+        default=60.0,
+        min=5.0,
+        max=600.0,
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "api_base_url")
+        layout.prop(self, "api_key")
+        layout.prop(self, "timeout_s")
+
+
+class HDRI_API_Settings(PropertyGroup):
+    input_image_path: StringProperty(
+        name="Input Image",
+        description="Path to a photo (jpg/png/webp)",
+        default="",
+        subtype="FILE_PATH",
+    )
+
+    scene_mode: EnumProperty(
+        name="Scene",
+        items=[
+            ("auto", "Auto", "Let server decide"),
+            ("outdoor", "Outdoor", "Outdoor-biased lighting"),
+            ("indoor", "Indoor", "Indoor-biased lighting"),
+            ("studio", "Studio", "Studio-like lighting"),
+        ],
+        default="auto",
+    )
+
+    quality_mode: EnumProperty(
+        name="Quality",
+        items=[
+            ("fast", "Fast (1–3s)", "Lighting-only / fastest"),
+            ("balanced", "Balanced (5–10s)", "Basic HDRI (recommended)"),
+            ("high", "High (15–30s)", "Diffusion refinement"),
+        ],
+        default="balanced",
+    )
+
+    preset: EnumProperty(
+        name="Style",
+        items=[
+            ("none", "None", "No creative edit"),
+            ("sunset", "Sunset", "Warm golden-hour look"),
+            ("overcast", "Overcast", "Soft diffuse sky"),
+            ("dramatic", "Dramatic Sky", "High-contrast clouds"),
+            ("studio_soft", "Studio Softbox", "Soft even studio"),
+            ("cyberpunk", "Cyberpunk", "Neon-magenta/cyan vibe"),
+        ],
+        default="none",
+    )
+
+    yaw_degrees: FloatProperty(
+        name="Yaw",
+        description="Rotate HDRI around Z (degrees). User-tweakable.",
+        default=0.0,
+        min=-180.0,
+        max=180.0,
+    )
+
+    exposure: FloatProperty(
+        name="Exposure",
+        description="Multiply World background strength (artistic)",
+        default=1.0,
+        min=0.0,
+        soft_max=10.0,
+    )
+
+    add_preview_sphere: BoolProperty(
+        name="Add preview sphere",
+        description="Adds a reflective sphere to preview the HDRI (optional)",
+        default=False,
+    )
+
+    # Option D: "Panorama diffusion endpoint + server HDR lift"
+    provider: EnumProperty(
+        name="Provider",
+        items=[
+            ("D", "D (External panorama→HDRI)", "API returns 2:1 EXR HDRI"),
+        ],
+        default="D",
+    )
+
+    # Sent to POST /v1/hdri — forwarded to PANORAMA_MODE=http_json worker (img2img / outpainting)
+    panorama_prompt: StringProperty(
+        name="Panorama prompt",
+        description="Prompt for your panorama worker (http_json). Empty = server/worker defaults",
+        default="",
+    )
+    panorama_negative_prompt: StringProperty(
+        name="Negative prompt",
+        description="Negative prompt for the panorama worker (optional)",
+        default="",
+    )
+    panorama_seed: IntProperty(
+        name="Seed",
+        description="Random seed for the worker. −1 = omit (worker decides)",
+        default=-1,
+        min=-1,
+        max=2_147_483_647,
+    )
+    panorama_strength: FloatProperty(
+        name="Img2img strength",
+        description="0–1 if your worker supports strength. −1 = omit",
+        default=-1.0,
+        min=-1.0,
+        max=1.0,
+    )
+    panorama_extra_json: StringProperty(
+        name="Extra JSON",
+        description='Optional JSON object merged into the worker request, e.g. {"foo": 1}',
+        default="",
+    )
+
+    heuristic_hdr_lift: BoolProperty(
+        name="Server HDR boost",
+        description="If on, API applies aggressive heuristic HDR tonemap after panorama. Off = flatter (raise Exposure in Blender if needed)",
+        default=True,
+    )
+
+    # Filled by GET /v1/config (Query API mode) and by last successful Apply
+    server_config_panorama_mode: StringProperty(
+        name="Server PANORAMA_MODE",
+        description="From API GET /v1/config — what the server process was started with",
+        default="",
+    )
+    last_panorama_mode: StringProperty(
+        name="Last job panorama_mode",
+        description="panorama_mode returned by the last successful Generate & Apply",
+        default="",
+    )
+
+
+class HDRI_OT_refresh_server_config(Operator):
+    bl_idname = "hdri_api.refresh_server_config"
+    bl_label = "Query API mode"
+    bl_description = "GET /v1/config — shows PANORAMA_MODE on the API server (resize vs http_json, etc.)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        s = context.scene.hdri_api_settings
+        base = prefs.api_base_url.rstrip("/")
+        url = f"{base}/v1/config"
+        headers = {}
+        if prefs.api_key:
+            headers["Authorization"] = f"Bearer {prefs.api_key}"
+        try:
+            data = _http_get_json(url, headers=headers, timeout_s=min(30.0, float(prefs.timeout_s)))
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            self.report({"ERROR"}, f"Config error {e.code}: {body[:200]}")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Config request failed: {e}")
+            return {"CANCELLED"}
+        mode = str(data.get("panorama_mode", "?"))
+        s.server_config_panorama_mode = mode
+        self.report({"INFO"}, f"Server PANORAMA_MODE={mode}")
+        return {"FINISHED"}
+
+
+class HDRI_OT_apply_from_api(Operator):
+    bl_idname = "hdri.apply_from_api"
+    bl_label = "Generate & Apply HDRI"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        s = context.scene.hdri_api_settings
+
+        if not s.input_image_path:
+            self.report({"ERROR"}, "Pick an input image first.")
+            return {"CANCELLED"}
+
+        img_path = bpy.path.abspath(s.input_image_path)
+        if not os.path.exists(img_path):
+            self.report({"ERROR"}, f"File not found: {img_path}")
+            return {"CANCELLED"}
+
+        try:
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode("ascii")
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to read image: {e}")
+            return {"CANCELLED"}
+
+        base = prefs.api_base_url.rstrip("/")
+        url = f"{base}/v1/hdri"
+
+        headers = {}
+        if prefs.api_key:
+            headers["Authorization"] = f"Bearer {prefs.api_key}"
+
+        payload = {
+            "provider": s.provider,
+            "image_b64": img_b64,
+            "scene_mode": s.scene_mode,
+            "quality_mode": s.quality_mode,
+            "preset": s.preset,
+            "output_width": 1024,
+            "output_height": 512,
+            "assume_upright": True,
+        }
+        # Match hdri_api_server/app.py HdriRequest — only add keys when set
+        if s.panorama_prompt.strip():
+            payload["panorama_prompt"] = s.panorama_prompt.strip()
+        if s.panorama_negative_prompt.strip():
+            payload["panorama_negative_prompt"] = s.panorama_negative_prompt.strip()
+        if s.panorama_seed >= 0:
+            payload["panorama_seed"] = int(s.panorama_seed)
+        if s.panorama_strength >= 0.0:
+            payload["panorama_strength"] = float(s.panorama_strength)
+        if s.panorama_extra_json.strip():
+            try:
+                payload["panorama_extra"] = json.loads(s.panorama_extra_json.strip())
+            except json.JSONDecodeError as e:
+                self.report({"ERROR"}, f"Extra JSON invalid: {e}")
+                return {"CANCELLED"}
+        payload["heuristic_hdr_lift"] = bool(s.heuristic_hdr_lift)
+
+        try:
+            resp = _http_post_json(url, payload, headers=headers, timeout_s=int(prefs.timeout_s))
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            self.report({"ERROR"}, f"API error {e.code}: {body[:300]}")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"API request failed: {e}")
+            return {"CANCELLED"}
+
+        # Prefer signed URL: hdri_url (Radiance .hdr) or exr_url (same URL or .exr)
+        download_url = None
+        if isinstance(resp, dict):
+            download_url = resp.get("hdri_url") or resp.get("exr_url")
+
+        file_bytes = None
+        if download_url:
+            try:
+                file_bytes = _download_bytes(download_url, headers=headers, timeout_s=int(prefs.timeout_s))
+            except Exception as e:
+                self.report({"ERROR"}, f"Failed to download HDRI: {e}")
+                return {"CANCELLED"}
+        elif isinstance(resp, dict) and resp.get("exr_base64"):
+            try:
+                file_bytes = base64.b64decode(resp["exr_base64"])
+            except Exception as e:
+                self.report({"ERROR"}, f"Bad exr_base64: {e}")
+                return {"CANCELLED"}
+        else:
+            self.report({"ERROR"}, "API response missing hdri_url, exr_url, or exr_base64.")
+            return {"CANCELLED"}
+
+        # Infer extension from URL path (Radiance .hdr vs OpenEXR .exr)
+        suffix = ".hdr"
+        if download_url:
+            path_part = download_url.split("?", 1)[0].lower()
+            if path_part.endswith(".exr"):
+                suffix = ".exr"
+            elif path_part.endswith(".hdr"):
+                suffix = ".hdr"
+        elif isinstance(resp, dict) and resp.get("exr_base64"):
+            suffix = ".exr"
+
+        # Blender needs a file path for Environment Texture. We'll write to a temp file.
+        # (Not “saving to library”; just a temp cache file for this session.)
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
+            os.close(fd)
+            with open(tmp_path, "wb") as f:
+                f.write(file_bytes)
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to write temp HDRI file: {e}")
+            return {"CANCELLED"}
+
+        try:
+            _ensure_cycles()
+            world = context.scene.world
+            if world is None:
+                world = bpy.data.worlds.new("World")
+                context.scene.world = world
+
+            nodes = _ensure_world_nodes(world)
+            env_node = nodes["env"]
+            bg_node = nodes["bg"]
+            mapping_node = nodes["mapping"]
+
+            # Load image into Blender and assign to env texture
+            img = bpy.data.images.load(tmp_path, check_existing=True)
+            # Blender 4.x+ renamed "Linear" — use scene-linear / linear Rec.709 for HDRI lighting
+            _set_env_image_colorspace(img)
+            env_node.image = img
+
+            # Apply yaw and exposure
+            mapping_node.inputs["Rotation"].default_value[2] = s.yaw_degrees * (3.141592653589793 / 180.0)
+            bg_node.inputs["Strength"].default_value = s.exposure
+
+            if s.add_preview_sphere:
+                _ensure_preview_sphere()
+
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to apply HDRI: {e}")
+            return {"CANCELLED"}
+
+        mode = resp.get("panorama_mode", "") if isinstance(resp, dict) else ""
+        if mode:
+            s.last_panorama_mode = str(mode)
+        if mode:
+            if mode == "resize":
+                self.report(
+                    {"INFO"},
+                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json).",
+                )
+            else:
+                self.report({"INFO"}, f"HDRI applied (panorama_mode={mode}).")
+        else:
+            self.report({"INFO"}, "HDRI applied to World.")
+        return {"FINISHED"}
+
+
+class HDRI_PT_panel(Panel):
+    bl_label = "Photo → HDRI (API)"
+    bl_idname = "HDRI_PT_panel"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "HDRI"
+
+    def draw(self, context):
+        layout = self.layout
+        s = context.scene.hdri_api_settings
+
+        col = layout.column(align=True)
+        col.prop(s, "input_image_path")
+        col.prop(s, "provider")
+
+        col.separator()
+        col.prop(s, "scene_mode")
+        col.prop(s, "quality_mode")
+        col.prop(s, "preset")
+
+        col.separator()
+        col.prop(s, "yaw_degrees")
+        col.prop(s, "exposure")
+        col.prop(s, "add_preview_sphere")
+
+        box = layout.box()
+        row = box.row(align=True)
+        row.label(text="Panorama backend")
+        row.operator(HDRI_OT_refresh_server_config.bl_idname, text="", icon="FILE_REFRESH")
+        cfg = (s.server_config_panorama_mode or "").strip()
+        last = (s.last_panorama_mode or "").strip()
+        if cfg:
+            box.label(text=f"Server env: {cfg}", icon="SETTINGS")
+        else:
+            box.label(text="Server env: (click refresh)", icon="QUESTION")
+        if last:
+            box.label(text=f"Last job: {last}", icon="CHECKMARK")
+        if cfg == "resize" or last == "resize":
+            box.label(
+                text="resize = only stretch photo to 2:1. Prompts/seed/strength are ignored.",
+                icon="ERROR",
+            )
+            box.label(
+                text="On the API host set PANORAMA_MODE=http_json and PANORAMA_HTTP_URL=…",
+                icon="INFO",
+            )
+
+        box.label(text="Panorama worker fields (http_json only)")
+        box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")
+        col2 = box.column(align=True)
+        col2.prop(s, "panorama_prompt")
+        col2.prop(s, "panorama_negative_prompt")
+        row = col2.row(align=True)
+        row.prop(s, "panorama_seed")
+        row.prop(s, "panorama_strength")
+        col2.prop(s, "panorama_extra_json")
+        col2.prop(s, "heuristic_hdr_lift")
+
+        col.separator()
+        col.operator(HDRI_OT_apply_from_api.bl_idname, icon="WORLD")
+
+
+classes = (
+    HDRI_API_Preferences,
+    HDRI_API_Settings,
+    HDRI_OT_refresh_server_config,
+    HDRI_OT_apply_from_api,
+    HDRI_PT_panel,
+)
+
+
+def register():
+    for c in classes:
+        bpy.utils.register_class(c)
+    bpy.types.Scene.hdri_api_settings = PointerProperty(type=HDRI_API_Settings)
+
+
+def unregister():
+    if hasattr(bpy.types.Scene, "hdri_api_settings"):
+        del bpy.types.Scene.hdri_api_settings
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)
+
