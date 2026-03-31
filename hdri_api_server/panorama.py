@@ -16,6 +16,7 @@ import io
 import json
 import os
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 from typing import Any
@@ -51,11 +52,24 @@ def _http_json_request(url: str, payload: dict, headers: dict[str, str], timeout
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _log_provider_event(provider: str, event: str, **fields: Any) -> None:
+    """Simple structured logs for provider comparisons and failure triage."""
+    safe_fields = {k: v for k, v in fields.items() if v is not None}
+    print(json.dumps({"provider": provider, "event": event, **safe_fields}))
+
+
 def panorama_resize(im: Image.Image, width: int, height: int) -> Image.Image:
     return im.convert("RGB").resize((width, height), resample=Image.BICUBIC)
 
 
-def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str, quality_mode: str) -> Image.Image:
+def panorama_replicate(
+    im: Image.Image,
+    width: int,
+    height: int,
+    scene_mode: str,
+    quality_mode: str,
+    request_overrides: dict[str, Any] | None = None,
+) -> Image.Image:
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     version = os.environ.get("REPLICATE_MODEL_VERSION", "").strip()
     if not token or not version:
@@ -64,7 +78,9 @@ def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str
             "(model version hash from replicate.com)"
         )
 
-    # Build model-specific input; override with REPLICATE_INPUT_JSON if set
+    # Build model-specific input; override with REPLICATE_INPUT_JSON if set.
+    # Suggested baseline model/version for MVP:
+    # pearsonkyle/360-panorama:5f638558adec78589e947290cb7083b0730dcfc8e8c9c9db6eebc5261edc09ca
     data_uri = image_to_jpeg_data_uri(im)
     input_obj: dict[str, Any] = {}
 
@@ -90,7 +106,26 @@ def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str
             prompt += ", indoor architecture"
         elif scene_mode == "studio":
             prompt += ", studio lighting, clean backdrop"
+        if quality_mode == "high":
+            prompt += ", highly detailed lighting"
+        elif quality_mode == "fast":
+            prompt += ", simple lighting"
         input_obj["prompt"] = prompt
+
+    # Per-request prompt overrides (shared with API panorama_* fields).
+    if request_overrides:
+        if isinstance(request_overrides.get("prompt"), str):
+            input_obj["prompt"] = request_overrides["prompt"]
+        if isinstance(request_overrides.get("negative_prompt"), str):
+            input_obj["negative_prompt"] = request_overrides["negative_prompt"]
+        if request_overrides.get("seed") is not None:
+            input_obj["seed"] = request_overrides["seed"]
+        if request_overrides.get("strength") is not None:
+            input_obj["strength"] = request_overrides["strength"]
+        # Preserve any extra model-specific knobs.
+        for k, v in request_overrides.items():
+            if k not in ("prompt", "negative_prompt", "seed", "strength"):
+                input_obj[k] = v
 
     # Allow forcing output size if the model supports width/height
     for key_w, key_h in (("width", "height"), ("output_width", "output_height")):
@@ -105,11 +140,19 @@ def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str
     req.add_header("Content-Type", "application/json")
     req.add_header("Authorization", f"Token {token}")
 
+    start_s = time.time()
+    _log_provider_event(
+        "replicate",
+        "create_prediction",
+        model_version=version,
+        create_url=create_url,
+    )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             pred = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")[:2000]
+        _log_provider_event("replicate", "create_failed", status_code=e.code, error=err_body[:600])
         raise RuntimeError(f"Replicate create failed: {e.code} {err_body}") from e
 
     pred_id = pred.get("id")
@@ -130,9 +173,24 @@ def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str
             out = pred.get("output")
             break
         if status in ("failed", "canceled"):
+            _log_provider_event(
+                "replicate",
+                "prediction_failed",
+                prediction_id=pred_id,
+                status=status,
+                error=pred.get("error"),
+                latency_ms=int((time.time() - start_s) * 1000),
+            )
             raise RuntimeError(f"Replicate prediction {status}: {pred.get('error') or pred}")
         time.sleep(poll_interval)
     else:
+        _log_provider_event(
+            "replicate",
+            "prediction_timeout",
+            prediction_id=pred_id,
+            timeout_s=os.environ.get("REPLICATE_POLL_TIMEOUT_S", "300"),
+            latency_ms=int((time.time() - start_s) * 1000),
+        )
         raise RuntimeError("Replicate: polling timed out")
 
     # output: URL string, list of URLs, or nested
@@ -150,6 +208,13 @@ def panorama_replicate(im: Image.Image, width: int, height: int, scene_mode: str
     if not url:
         raise RuntimeError(f"Replicate: unexpected output shape: {out!r}")
 
+    _log_provider_event(
+        "replicate",
+        "prediction_succeeded",
+        prediction_id=pred_id,
+        output_url_host=urllib.parse.urlparse(url).netloc,
+        latency_ms=int((time.time() - start_s) * 1000),
+    )
     raw = _download_url(url, timeout_s=120)
     pano = Image.open(io.BytesIO(raw))
     return pano.convert("RGB").resize((width, height), resample=Image.BICUBIC)
@@ -338,7 +403,17 @@ def build_equirectangular(
     if mode == "resize":
         return panorama_resize(im, width, height), mode
     if mode == "replicate":
-        return panorama_replicate(im, width, height, scene_mode, quality_mode), mode
+        return (
+            panorama_replicate(
+                im,
+                width,
+                height,
+                scene_mode,
+                quality_mode,
+                request_overrides=http_json_overrides,
+            ),
+            mode,
+        )
     if mode == "http_json":
         return (
             panorama_http_json(

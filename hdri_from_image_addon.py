@@ -70,6 +70,24 @@ def _ensure_world_nodes(world: bpy.types.World):
         env = nodes.new("ShaderNodeTexEnvironment")
         env.location = (-350, 0)
 
+    env_blur = next((n for n in nodes if n.bl_idname == "ShaderNodeTexEnvironment" and n != env), None)
+    if env_blur is None:
+        env_blur = nodes.new("ShaderNodeTexEnvironment")
+        env_blur.label = "HDRI Blur Source"
+        env_blur.location = (-350, -220)
+
+    mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB"), None)
+    if mix is None:
+        mix = nodes.new("ShaderNodeMixRGB")
+        mix.location = (-120, -80)
+        mix.blend_type = "MIX"
+        mix.inputs["Fac"].default_value = 0.0
+
+    hue_sat = next((n for n in nodes if n.bl_idname == "ShaderNodeHueSaturation"), None)
+    if hue_sat is None:
+        hue_sat = nodes.new("ShaderNodeHueSaturation")
+        hue_sat.location = (30, -80)
+
     mapping = next((n for n in nodes if n.bl_idname == "ShaderNodeMapping"), None)
     if mapping is None:
         mapping = nodes.new("ShaderNodeMapping")
@@ -84,10 +102,26 @@ def _ensure_world_nodes(world: bpy.types.World):
         links.new(texcoord.outputs["Generated"], mapping.inputs["Vector"])
     if not env.inputs["Vector"].is_linked:
         links.new(mapping.outputs["Vector"], env.inputs["Vector"])
+    if not env_blur.inputs["Vector"].is_linked:
+        links.new(mapping.outputs["Vector"], env_blur.inputs["Vector"])
+    if not mix.inputs["Color1"].is_linked:
+        links.new(env.outputs["Color"], mix.inputs["Color1"])
+    if not mix.inputs["Color2"].is_linked:
+        links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
+    if not hue_sat.inputs["Color"].is_linked:
+        links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
     if not bg.inputs["Color"].is_linked:
-        links.new(env.outputs["Color"], bg.inputs["Color"])
+        links.new(hue_sat.outputs["Color"], bg.inputs["Color"])
 
-    return {"nt": nt, "env": env, "bg": bg, "mapping": mapping}
+    return {
+        "nt": nt,
+        "env": env,
+        "env_blur": env_blur,
+        "mix": mix,
+        "hue_sat": hue_sat,
+        "bg": bg,
+        "mapping": mapping,
+    }
 
 
 def _ensure_cycles():
@@ -233,6 +267,15 @@ class HDRI_API_Settings(PropertyGroup):
         ],
         default="balanced",
     )
+    output_resolution: EnumProperty(
+        name="Output Resolution",
+        items=[
+            ("1024x512", "1024x512", "Fast preview size"),
+            ("2048x1024", "2048x1024", "Default local ComfyUI target"),
+            ("4096x2048", "4096x2048", "High resolution (heavy GPU load)"),
+        ],
+        default="2048x1024",
+    )
 
     preset: EnumProperty(
         name="Style",
@@ -254,6 +297,20 @@ class HDRI_API_Settings(PropertyGroup):
         min=-180.0,
         max=180.0,
     )
+    pitch_degrees: FloatProperty(
+        name="Pitch",
+        description="Rotate HDRI around X (advanced)",
+        default=0.0,
+        min=-90.0,
+        max=90.0,
+    )
+    roll_degrees: FloatProperty(
+        name="Roll",
+        description="Rotate HDRI around Y (advanced)",
+        default=0.0,
+        min=-180.0,
+        max=180.0,
+    )
 
     exposure: FloatProperty(
         name="Exposure",
@@ -261,6 +318,39 @@ class HDRI_API_Settings(PropertyGroup):
         default=1.0,
         min=0.0,
         soft_max=10.0,
+    )
+    post_exposure: FloatProperty(
+        name="Post Exposure",
+        description="Extra world strength multiplier applied in Blender nodes",
+        default=1.0,
+        min=0.0,
+        soft_max=10.0,
+    )
+    blur_amount: FloatProperty(
+        name="Blur",
+        description="Mixes in a blurred copy of the HDRI for softer lighting",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+    )
+    hue_shift: FloatProperty(
+        name="Hue Shift",
+        description="Shift hue in Blender (non-destructive)",
+        default=0.0,
+        min=-0.5,
+        max=0.5,
+    )
+    saturation: FloatProperty(
+        name="Saturation",
+        description="Saturation multiplier in Blender (1.0 = unchanged)",
+        default=1.0,
+        min=0.0,
+        max=2.0,
+    )
+    bake_adjustments_on_server: BoolProperty(
+        name="Bake controls on server",
+        description="If enabled, blur/hue/sat/post exposure are baked into the returned HDR file",
+        default=False,
     )
 
     add_preview_sphere: BoolProperty(
@@ -307,6 +397,39 @@ class HDRI_API_Settings(PropertyGroup):
         name="Extra JSON",
         description='Optional JSON object merged into the worker request, e.g. {"foo": 1}',
         default="",
+    )
+    erp_layout_mode: EnumProperty(
+        name="ERP Layout",
+        items=[
+            ("single_front", "Single Front", "Place source image at front-center on ERP canvas"),
+        ],
+        default="single_front",
+    )
+    reference_coverage: FloatProperty(
+        name="Reference Coverage",
+        description="How much panorama width the source image should occupy on control canvas",
+        default=0.40,
+        min=0.15,
+        max=0.85,
+    )
+    seam_fix: BoolProperty(
+        name="Seam Fix",
+        description="Enable seam smoothing/fix step in worker",
+        default=True,
+    )
+    erp_canvas_width: IntProperty(
+        name="ERP Canvas Width",
+        description="Optional worker control canvas width (-1 = use output width)",
+        default=-1,
+        min=-1,
+        max=16384,
+    )
+    erp_canvas_height: IntProperty(
+        name="ERP Canvas Height",
+        description="Optional worker control canvas height (-1 = use output height)",
+        default=-1,
+        min=-1,
+        max=8192,
     )
 
     heuristic_hdr_lift: BoolProperty(
@@ -365,6 +488,14 @@ class HDRI_OT_apply_from_api(Operator):
     bl_label = "Generate & Apply HDRI"
     bl_options = {"REGISTER"}
 
+    @staticmethod
+    def _resolution_pair(value: str) -> tuple[int, int]:
+        try:
+            w_s, h_s = value.lower().split("x", 1)
+            return int(w_s), int(h_s)
+        except Exception:
+            return 2048, 1024
+
     def execute(self, context):
         prefs = _addon_prefs()
         s = context.scene.hdri_api_settings
@@ -392,14 +523,15 @@ class HDRI_OT_apply_from_api(Operator):
         if prefs.api_key:
             headers["Authorization"] = f"Bearer {prefs.api_key}"
 
+        out_w, out_h = self._resolution_pair(s.output_resolution)
         payload = {
             "provider": s.provider,
             "image_b64": img_b64,
             "scene_mode": s.scene_mode,
             "quality_mode": s.quality_mode,
             "preset": s.preset,
-            "output_width": 1024,
-            "output_height": 512,
+            "output_width": out_w,
+            "output_height": out_h,
             "assume_upright": True,
         }
         # Match hdri_api_server/app.py HdriRequest — only add keys when set
@@ -411,6 +543,13 @@ class HDRI_OT_apply_from_api(Operator):
             payload["panorama_seed"] = int(s.panorama_seed)
         if s.panorama_strength >= 0.0:
             payload["panorama_strength"] = float(s.panorama_strength)
+        payload["erp_layout_mode"] = s.erp_layout_mode
+        payload["reference_coverage"] = float(s.reference_coverage)
+        payload["seam_fix"] = bool(s.seam_fix)
+        if s.erp_canvas_width > 0:
+            payload["erp_canvas_width"] = int(s.erp_canvas_width)
+        if s.erp_canvas_height > 0:
+            payload["erp_canvas_height"] = int(s.erp_canvas_height)
         if s.panorama_extra_json.strip():
             try:
                 payload["panorama_extra"] = json.loads(s.panorama_extra_json.strip())
@@ -418,6 +557,11 @@ class HDRI_OT_apply_from_api(Operator):
                 self.report({"ERROR"}, f"Extra JSON invalid: {e}")
                 return {"CANCELLED"}
         payload["heuristic_hdr_lift"] = bool(s.heuristic_hdr_lift)
+        if s.bake_adjustments_on_server:
+            payload["blur_sigma"] = float(s.blur_amount * 6.0)
+            payload["hue_shift"] = float(s.hue_shift)
+            payload["sat_scale"] = float(s.saturation)
+            payload["color_gain"] = float(s.post_exposure)
 
         try:
             resp = _http_post_json(url, payload, headers=headers, timeout_s=int(prefs.timeout_s))
@@ -485,6 +629,9 @@ class HDRI_OT_apply_from_api(Operator):
 
             nodes = _ensure_world_nodes(world)
             env_node = nodes["env"]
+            env_blur_node = nodes["env_blur"]
+            mix_node = nodes["mix"]
+            hue_sat_node = nodes["hue_sat"]
             bg_node = nodes["bg"]
             mapping_node = nodes["mapping"]
 
@@ -493,10 +640,16 @@ class HDRI_OT_apply_from_api(Operator):
             # Blender 4.x+ renamed "Linear" — use scene-linear / linear Rec.709 for HDRI lighting
             _set_env_image_colorspace(img)
             env_node.image = img
+            env_blur_node.image = img
 
-            # Apply yaw and exposure
+            # Apply rotation and look controls.
+            mapping_node.inputs["Rotation"].default_value[0] = s.pitch_degrees * (3.141592653589793 / 180.0)
+            mapping_node.inputs["Rotation"].default_value[1] = s.roll_degrees * (3.141592653589793 / 180.0)
             mapping_node.inputs["Rotation"].default_value[2] = s.yaw_degrees * (3.141592653589793 / 180.0)
-            bg_node.inputs["Strength"].default_value = s.exposure
+            hue_sat_node.inputs["Hue"].default_value = 0.5 + s.hue_shift
+            hue_sat_node.inputs["Saturation"].default_value = s.saturation
+            mix_node.inputs["Fac"].default_value = s.blur_amount
+            bg_node.inputs["Strength"].default_value = s.exposure * s.post_exposure
 
             if s.add_preview_sphere:
                 _ensure_preview_sphere()
@@ -539,11 +692,19 @@ class HDRI_PT_panel(Panel):
         col.separator()
         col.prop(s, "scene_mode")
         col.prop(s, "quality_mode")
+        col.prop(s, "output_resolution")
         col.prop(s, "preset")
 
         col.separator()
         col.prop(s, "yaw_degrees")
+        col.prop(s, "pitch_degrees")
+        col.prop(s, "roll_degrees")
         col.prop(s, "exposure")
+        col.prop(s, "post_exposure")
+        col.prop(s, "blur_amount")
+        col.prop(s, "hue_shift")
+        col.prop(s, "saturation")
+        col.prop(s, "bake_adjustments_on_server")
         col.prop(s, "add_preview_sphere")
 
         box = layout.box()
@@ -570,12 +731,19 @@ class HDRI_PT_panel(Panel):
 
         box.label(text="Panorama worker fields (http_json only)")
         box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")
+        box.label(text="Local mode: run API server + worker + ComfyUI before Generate.", icon="INFO")
         col2 = box.column(align=True)
         col2.prop(s, "panorama_prompt")
         col2.prop(s, "panorama_negative_prompt")
         row = col2.row(align=True)
         row.prop(s, "panorama_seed")
         row.prop(s, "panorama_strength")
+        col2.prop(s, "erp_layout_mode")
+        col2.prop(s, "reference_coverage")
+        col2.prop(s, "seam_fix")
+        row2 = col2.row(align=True)
+        row2.prop(s, "erp_canvas_width")
+        row2.prop(s, "erp_canvas_height")
         col2.prop(s, "panorama_extra_json")
         col2.prop(s, "heuristic_hdr_lift")
 

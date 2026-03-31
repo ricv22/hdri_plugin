@@ -1,18 +1,21 @@
 # HDRI API Server (MVP)
 
-Returns a **signed download URL** (`hdri_url` / `exr_url`) for a **1024×512** environment map.
+Returns a signed download URL (`hdri_url` / `exr_url`) for a generated HDR environment map.
 
 ## Why `.hdr` instead of OpenEXR?
 
-On **Windows**, `pip install OpenEXR` often tries to **compile C++** (CMake + MSVC). That fails if you do not have the Visual Studio build tools.
+On Windows, `pip install OpenEXR` often requires a native C++ toolchain.  
+This server writes Radiance RGBE `.hdr` using pure Python + NumPy.
 
-This server writes **Radiance RGBE `.hdr`** using pure Python + NumPy — **no compiler**. Blender’s Environment Texture loads `.hdr` fine for HDRI lighting.
+## Default sizes
 
-## Python version
+The API now supports these 2:1 output sizes:
 
-Use **Python 3.11 or 3.12** for the venv if possible. **Python 3.14** is very new; many packages may not ship wheels yet.
+- `1024x512`
+- `2048x1024` (default)
+- `4096x2048`
 
-## Run
+## Run API server
 
 ```powershell
 cd hdri_api_server
@@ -24,13 +27,13 @@ $env:HDRI_SIGNING_SECRET="change-me"
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/docs` to verify the server is up.
+Open `http://127.0.0.1:8000/docs`.
 
 ## API
 
 ### `POST /v1/hdri`
 
-Body (JSON):
+Example body:
 
 ```json
 {
@@ -39,14 +42,23 @@ Body (JSON):
   "scene_mode": "auto",
   "quality_mode": "balanced",
   "preset": "none",
-  "output_width": 1024,
-  "output_height": 512,
+  "output_width": 2048,
+  "output_height": 1024,
   "assume_upright": true,
-  "panorama_prompt": "optional — forwarded to http_json worker",
+  "panorama_prompt": "optional",
   "panorama_negative_prompt": null,
   "panorama_seed": null,
   "panorama_strength": null,
-  "panorama_extra": null
+  "erp_layout_mode": "single_front",
+  "reference_coverage": 0.4,
+  "seam_fix": true,
+  "erp_canvas_width": null,
+  "erp_canvas_height": null,
+  "panorama_extra": null,
+  "hue_shift": 0.0,
+  "sat_scale": 1.0,
+  "blur_sigma": 0.0,
+  "color_gain": 1.0
 }
 ```
 
@@ -56,14 +68,27 @@ Response:
 {
   "hdri_url": "http://127.0.0.1:8000/v1/files/<uuid>.hdr?exp=...&sig=...",
   "exr_url": "http://127.0.0.1:8000/v1/files/<uuid>.hdr?exp=...&sig=...",
-  "width": 1024,
-  "height": 512,
+  "width": 2048,
+  "height": 1024,
   "format": "hdr_rgbe",
-  "panorama_mode": "resize"
+  "panorama_mode": "http_json"
 }
 ```
 
-(`exr_url` is kept as an alias of `hdri_url` for older clients; the file is still `.hdr`.)
+### `POST /v1/jobs/hdri`
+
+Creates an async generation job and returns:
+
+```json
+{
+  "job_id": "uuid",
+  "status": "queued"
+}
+```
+
+### `GET /v1/jobs/{job_id}`
+
+Poll until `status` is `succeeded` or `failed`.
 
 ### `GET /v1/files/{id}.hdr?exp=...&sig=...`
 
@@ -71,138 +96,98 @@ Downloads the HDR file.
 
 ### `GET /v1/config`
 
-Returns which **panorama backend** is active (`panorama_mode`).
+Shows active panorama backend (`panorama_mode`).
 
----
+## Local ComfyUI worker (recommended for V1)
 
-## Image-conditioned panorama (`http_json` / img2img)
-
-For **true image → equirectangular** (inpainting, outpainting, DiT360-style ERP control images, ComfyUI, etc.), use:
+Set API server to forward panorama generation to your local worker:
 
 ```powershell
 $env:PANORAMA_MODE="http_json"
 $env:PANORAMA_HTTP_URL="http://127.0.0.1:8001/v1/panorama"
 ```
 
-Your worker receives a **JSON POST** with at least:
-
-| Field | Meaning |
-|--------|--------|
-| `image_b64` | User photo (same as Blender/API client sent) |
-| `width` | Target width (e.g. 1024) |
-| `height` | Target height (e.g. 512) |
-| `scene_mode` | `auto` / `outdoor` / `indoor` / `studio` |
-| `quality_mode` | `fast` / `balanced` / `high` |
-
-Optional fields (sent when set on `POST /v1/hdri`):
-
-| Field | Meaning |
-|--------|--------|
-| `prompt` | Main prompt for img2img / outpainting |
-| `negative_prompt` | Negative prompt |
-| `seed` | Integer seed |
-| `strength` | Img2img strength 0–1 (if your worker supports it) |
-
-Plus any keys from **`panorama_extra`** on the request, and static keys from env **`PANORAMA_HTTP_BODY_JSON`** (merged before; request fields override).
-
-**Response** must include one of: **`image_b64`**, **`image_url`**, **`output_url`** (PNG/JPEG equirectangular or any image the HDR step can interpret).
-
-### Stub worker (test without GPU)
-
-From the `hdri_api_server` folder:
+Run worker:
 
 ```powershell
 cd hdri_api_server
-pip install fastapi uvicorn pillow
-python -m uvicorn examples.img2pano_worker_stub:app --host 127.0.0.1 --port 8001
+python -m uvicorn examples.comfyui_worker:app --host 127.0.0.1 --port 8001
 ```
 
-Point `PANORAMA_HTTP_URL` at `http://127.0.0.1:8001/v1/panorama`. The stub only **resizes** the input to 2:1 so you can verify wiring; replace `panorama()` with your DiT360 / ComfyUI pipeline.
+Worker health check:
 
----
+- `http://127.0.0.1:8001/health`
 
-## Panorama diffusion (before HDR lift)
+### Worker request contract
 
-The pipeline is: **photo → 2:1 equirectangular image → HDR lift → `.hdr`**.
+Base fields:
 
-Set **`PANORAMA_MODE`**:
+- `image_b64`
+- `width`, `height` (2:1)
+- `scene_mode`
+- `quality_mode`
+- `prompt`
+- `negative_prompt`
+- `seed`
+- `strength`
 
-| Mode | What it does |
-|------|----------------|
-| `resize` | **Default.** Stretch input to 1024×512 (no external API). |
-| `replicate` | Calls **[Replicate](https://replicate.com)** predictions API, then resizes to 1024×512. |
-| `http_json` | `POST` JSON to **`PANORAMA_HTTP_URL`**; expects `image_b64` or `image_url` / `output_url` back. |
-| `hf_dit360` | **[Hugging Face Inference API](https://huggingface.co/docs/api-inference/tasks/text-to-image)** for **`Insta360-Research/DiT360-Panorama-Image-Generation`**. |
+ERP placement fields (V1):
 
-### Hugging Face DiT360 (`hf_dit360`)
+- `erp_layout_mode` (`single_front`)
+- `reference_coverage` (`0.15..0.85`, default `0.40`)
+- `seam_fix` (optional bool, quality-based default if omitted)
+- `erp_canvas_width` / `erp_canvas_height` (optional 2:1 control canvas)
 
-Insta360 documents using DiT360 as a component with Hub access. This server calls the **text-to-image** inference endpoint:
+Response must include one of:
 
-- **Endpoint (default):** `https://api-inference.huggingface.co/models/Insta360-Research/DiT360-Panorama-Image-Generation`  
-  Override with **`HF_INFERENCE_URL`** if you use a [Dedicated Inference Endpoint](https://huggingface.co/docs/inference-endpoints/index) or a future router URL.
+- `image_b64`
+- `image_url`
+- `output_url`
 
-**Important caveats**
+## ComfyUI configuration for the worker
 
-1. **Deployment:** On the [model card](https://huggingface.co/Insta360-Research/DiT360-Panorama-Image-Generation), Hugging Face may show *“This model isn't deployed by any Inference Provider”*. In that case **serverless API calls can fail** until a provider hosts the model, or you deploy it yourself on **Inference Endpoints** / run the [GitHub](https://github.com/Insta360-Research-Team/DiT360) code locally.
-2. **Image conditioning:** The official `inference.py` example is **text-to-panorama** only. Your **uploaded photo is not sent** to DiT360 in this mode (unless you later add e.g. captioning + prompt). For **image → panorama** with conditioning, use **`replicate`**, **`http_json`** to your own worker, or **local** DiT360 with their full pipeline.
+Environment variables used by `examples/comfyui_worker.py`:
 
-**Environment (Windows-friendly)**
+- `COMFYUI_SERVER_URL` (default `http://127.0.0.1:8188`)
+- `COMFYUI_WORKFLOW_TEMPLATE` (default `examples/comfyui_flux2_klein_template.json`)
+- `COMFYUI_BASE_MODEL` (base model checkpoint filename)
+- `COMFYUI_KLEIN_LORA` (LoRA filename)
+- `COMFYUI_FAST_STEPS` / `COMFYUI_BALANCED_STEPS` / `COMFYUI_HIGH_STEPS`
+- `COMFYUI_CFG`
+- `COMFYUI_DEFAULT_STRENGTH`
+- `COMFYUI_DEFAULT_PROMPT`
+- `COMFYUI_DEFAULT_NEGATIVE_PROMPT`
+- `COMFYUI_POLL_TIMEOUT_S`
+- `COMFYUI_POLL_INTERVAL_S`
+
+The included workflow template is a starter baseline.  
+You will usually adapt node IDs/inputs to your actual ComfyUI graph.
+
+## Panorama backend modes
+
+Set `PANORAMA_MODE`:
+
+- `resize`: stretch input to 2:1
+- `replicate`: call Replicate predictions API
+- `http_json`: call your worker endpoint
+- `hf_dit360`: call Hugging Face inference API
+
+## Benchmarks
+
+Replicate benchmark:
 
 ```powershell
-$env:PANORAMA_MODE="hf_dit360"
-$env:HF_API_TOKEN="hf_..."   # token with permission to call Inference API / providers
-# Optional:
-# $env:HF_DIT360_PROMPT="Your full prompt overriding scene defaults"
-# $env:HF_GUIDANCE_SCALE="2.8"
-# $env:HF_NUM_INFERENCE_STEPS="28"
-# $env:HF_INFERENCE_RETRIES="6"
-# $env:HF_INFERENCE_RETRY_DELAY_S="3"
+python benchmarks/run_replicate_benchmark.py
 ```
 
-### Replicate
-
-1. Pick a model on Replicate that outputs a **360° / equirectangular** image (or image URL). Copy the **version id** (long hash).
-2. Set:
+Local worker benchmark:
 
 ```powershell
-$env:PANORAMA_MODE="replicate"
-$env:REPLICATE_API_TOKEN="r8_..."
-$env:REPLICATE_MODEL_VERSION="<version-hash>"
+$env:PANORAMA_HTTP_URL="http://127.0.0.1:8001/v1/panorama"
+python benchmarks/run_local_worker_benchmark.py
 ```
 
-Optional:
+Outputs:
 
-- **`REPLICATE_PROMPT`** — overrides the default text prompt (if you do not use `REPLICATE_INPUT_JSON`).
-- **`REPLICATE_INPUT_JSON`** — full JSON object merged into Replicate `input` (for model-specific keys). If you omit the image field, the server injects a JPEG **data URI** into **`REPLICATE_IMAGE_FIELD`** (default `image`).
-- **`REPLICATE_IMAGE_FIELD`** — e.g. `image` or `input_image` depending on the model.
-- **`REPLICATE_POLL_TIMEOUT_S`** — default `300`.
-- **`REPLICATE_POLL_INTERVAL_S`** — default `1.0`.
-
-### Generic HTTP JSON
-
-Your service receives:
-
-```json
-{
-  "image_b64": "<same as client sent>",
-  "width": 1024,
-  "height": 512,
-  "scene_mode": "auto|outdoor|indoor|studio",
-  "quality_mode": "fast|balanced|high"
-}
-```
-
-Merged with optional **`PANORAMA_HTTP_BODY_JSON`** (object).
-
-Set:
-
-```powershell
-$env:PANORAMA_MODE="http_json"
-$env:PANORAMA_HTTP_URL="https://your-api.example.com/v1/panorama"
-$env:PANORAMA_HTTP_API_KEY="..."   # optional
-$env:PANORAMA_HTTP_HEADERS_JSON='{"X-Custom":"1"}'   # optional
-```
-
-Response must include one of: **`image_b64`**, **`image_url`**, **`output_url`**.
-
-The `POST /v1/hdri` response includes **`panorama_mode`** so you can confirm which path ran.
+- `benchmarks/local_worker_metrics.csv`
+- `benchmarks/local_worker_report.md`

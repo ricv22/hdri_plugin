@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import os
+import threading
 import time
 import uuid
 from typing import Any, Literal
@@ -62,8 +63,8 @@ class HdriRequest(BaseModel):
     quality_mode: Literal["fast", "balanced", "high"] = "balanced"
     preset: Literal["none", "sunset", "overcast", "dramatic", "studio_soft", "cyberpunk"] = "none"
 
-    output_width: int = 1024
-    output_height: int = 512
+    output_width: int = 2048
+    output_height: int = 1024
     assume_upright: bool = True
 
     # Only used when PANORAMA_MODE=http_json — forwarded to your img2img / panorama worker
@@ -83,11 +84,40 @@ class HdriRequest(BaseModel):
         None,
         description="Arbitrary extra fields merged into the POST JSON to PANORAMA_HTTP_URL (after env body).",
     )
+    erp_layout_mode: str | None = Field(
+        None,
+        description="Worker ERP placement mode (e.g. single_front).",
+    )
+    reference_coverage: float | None = Field(
+        None,
+        ge=0.15,
+        le=0.85,
+        description="Relative width coverage of source image on ERP control canvas.",
+    )
+    seam_fix: bool | None = Field(
+        None,
+        description="If set, overrides worker seam-fix default behavior.",
+    )
+    erp_canvas_width: int | None = Field(
+        None,
+        ge=512,
+        description="Optional ERP control canvas width; must be 2x erp_canvas_height.",
+    )
+    erp_canvas_height: int | None = Field(
+        None,
+        ge=256,
+        description="Optional ERP control canvas height; must be 1/2 erp_canvas_width.",
+    )
 
     heuristic_hdr_lift: bool = Field(
         True,
         description="If True, apply server-side HDR boost (_fake_hdr_lift). If False, mild linear scale only (flatter).",
     )
+    # Optional baked controls if the client wants the generated file itself adjusted.
+    hue_shift: float = Field(0.0, ge=-1.0, le=1.0, description="Hue shift in normalized turns (-1..1).")
+    sat_scale: float = Field(1.0, ge=0.0, le=2.0, description="Saturation multiplier for baked output.")
+    blur_sigma: float = Field(0.0, ge=0.0, le=16.0, description="Gaussian blur sigma for baked output.")
+    color_gain: float = Field(1.0, ge=0.0, le=8.0, description="Post-color gain multiplier for baked output.")
 
 
 class HdriResponse(BaseModel):
@@ -101,6 +131,23 @@ class HdriResponse(BaseModel):
     format: str = "hdr_rgbe"
     # How the 2:1 panorama was produced before HDR lift (see PANORAMA_MODE)
     panorama_mode: str = "resize"
+
+
+class HdriJobCreateResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running"]
+
+
+class HdriJobStatusResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    hdri_url: str | None = None
+    exr_url: str | None = None
+    width: int | None = None
+    height: int | None = None
+    format: str | None = None
+    panorama_mode: str | None = None
+    error: str | None = None
 
 
 def _b64_to_bytes(s: str) -> bytes:
@@ -179,6 +226,85 @@ def _fake_hdr_lift(rgb_lin: np.ndarray, quality_mode: str) -> np.ndarray:
     return np.clip(out, 0.0, None).astype(np.float32)
 
 
+def _rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
+    r = rgb[..., 0]
+    g = rgb[..., 1]
+    b = rgb[..., 2]
+    cmax = np.max(rgb, axis=-1)
+    cmin = np.min(rgb, axis=-1)
+    delta = cmax - cmin
+
+    h = np.zeros_like(cmax)
+    mask = delta > 1e-8
+    rmask = mask & (cmax == r)
+    gmask = mask & (cmax == g)
+    bmask = mask & (cmax == b)
+    h[rmask] = ((g[rmask] - b[rmask]) / delta[rmask]) % 6.0
+    h[gmask] = ((b[gmask] - r[gmask]) / delta[gmask]) + 2.0
+    h[bmask] = ((r[bmask] - g[bmask]) / delta[bmask]) + 4.0
+    h = (h / 6.0) % 1.0
+
+    s = np.zeros_like(cmax)
+    nz = cmax > 1e-8
+    s[nz] = delta[nz] / cmax[nz]
+    v = cmax
+    return np.stack([h, s, v], axis=-1)
+
+
+def _hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
+    h = (hsv[..., 0] % 1.0) * 6.0
+    s = np.clip(hsv[..., 1], 0.0, 1.0)
+    v = np.clip(hsv[..., 2], 0.0, None)
+    i = np.floor(h).astype(np.int32)
+    f = h - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+
+    i_mod = i % 6
+    out = np.zeros_like(hsv)
+    out[i_mod == 0] = np.stack([v, t, p], axis=-1)[i_mod == 0]
+    out[i_mod == 1] = np.stack([q, v, p], axis=-1)[i_mod == 1]
+    out[i_mod == 2] = np.stack([p, v, t], axis=-1)[i_mod == 2]
+    out[i_mod == 3] = np.stack([p, q, v], axis=-1)[i_mod == 3]
+    out[i_mod == 4] = np.stack([t, p, v], axis=-1)[i_mod == 4]
+    out[i_mod == 5] = np.stack([v, p, q], axis=-1)[i_mod == 5]
+    return out
+
+
+def _apply_baked_adjustments(rgb_lin: np.ndarray, req: HdriRequest) -> np.ndarray:
+    out = rgb_lin
+    if req.blur_sigma > 0:
+        tmp = np.clip(out, 0.0, 1.0)
+        pil = Image.fromarray((tmp * 255.0).astype(np.uint8), mode="RGB")
+        # Pillow ImageFilter import kept local to avoid startup overhead.
+        from PIL import ImageFilter
+
+        pil = pil.filter(ImageFilter.GaussianBlur(radius=req.blur_sigma))
+        out = np.asarray(pil).astype(np.float32) / 255.0
+
+    if abs(req.hue_shift) > 1e-6 or abs(req.sat_scale - 1.0) > 1e-6:
+        hsv = _rgb_to_hsv(np.clip(out, 0.0, None))
+        hsv[..., 0] = (hsv[..., 0] + req.hue_shift) % 1.0
+        hsv[..., 1] = np.clip(hsv[..., 1] * req.sat_scale, 0.0, 1.0)
+        out = _hsv_to_rgb(hsv)
+
+    if abs(req.color_gain - 1.0) > 1e-6:
+        out = out * req.color_gain
+    return np.clip(out, 0.0, None).astype(np.float32)
+
+
+def _validate_output_size(width: int, height: int) -> None:
+    allowed = {(1024, 512), (2048, 1024), (4096, 2048)}
+    if (width, height) not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail="Output size must be one of 1024x512, 2048x1024, or 4096x2048.",
+        )
+    if width != 2 * height:
+        raise HTTPException(status_code=400, detail="Output must use 2:1 equirectangular ratio.")
+
+
 def _sign(file_id: str, exp: int) -> str:
     msg = f"{file_id}:{exp}".encode("utf-8")
     return hmac.new(SIGNING_SECRET, msg, hashlib.sha256).hexdigest()
@@ -192,33 +318,39 @@ def _verify(file_id: str, exp: int, sig: str) -> bool:
 
 
 app = FastAPI(title=APP_NAME)
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
 
 
-@app.get("/v1/config")
-def config():
-    """Non-secret hints for debugging (which panorama backend is active)."""
-    return {
-        "panorama_mode": get_mode(),
-        "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
-    }
-
-
-@app.post("/v1/hdri", response_model=HdriResponse)
-def create_hdri(req: HdriRequest):
-    if req.output_width != 1024 or req.output_height != 512:
-        raise HTTPException(status_code=400, detail="MVP supports only 1024x512 currently.")
-
-    http_json_overrides: dict[str, Any] = {}
+def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
     if req.panorama_prompt is not None:
-        http_json_overrides["prompt"] = req.panorama_prompt
+        overrides["prompt"] = req.panorama_prompt
     if req.panorama_negative_prompt is not None:
-        http_json_overrides["negative_prompt"] = req.panorama_negative_prompt
+        overrides["negative_prompt"] = req.panorama_negative_prompt
     if req.panorama_seed is not None:
-        http_json_overrides["seed"] = req.panorama_seed
+        overrides["seed"] = req.panorama_seed
     if req.panorama_strength is not None:
-        http_json_overrides["strength"] = req.panorama_strength
+        overrides["strength"] = req.panorama_strength
+    if req.erp_layout_mode is not None:
+        overrides["erp_layout_mode"] = req.erp_layout_mode
+    if req.reference_coverage is not None:
+        overrides["reference_coverage"] = req.reference_coverage
+    if req.seam_fix is not None:
+        overrides["seam_fix"] = req.seam_fix
+    if req.erp_canvas_width is not None:
+        overrides["erp_canvas_width"] = req.erp_canvas_width
+    if req.erp_canvas_height is not None:
+        overrides["erp_canvas_height"] = req.erp_canvas_height
     if req.panorama_extra:
-        http_json_overrides.update(req.panorama_extra)
+        overrides.update(req.panorama_extra)
+    return overrides
+
+
+def _generate_hdri(req: HdriRequest) -> HdriResponse:
+    _validate_output_size(req.output_width, req.output_height)
+
+    panorama_overrides = _build_panorama_overrides(req)
 
     try:
         im, pano_mode = build_equirectangular(
@@ -227,7 +359,7 @@ def create_hdri(req: HdriRequest):
             req.output_height,
             req.scene_mode,
             req.quality_mode,
-            http_json_overrides=http_json_overrides or None,
+            http_json_overrides=panorama_overrides or None,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
@@ -239,6 +371,7 @@ def create_hdri(req: HdriRequest):
     rgb = np.asarray(im).astype(np.float32) / 255.0
     rgb_lin = _srgb_to_linear(rgb)
     rgb_lin = _apply_preset(rgb_lin, req.preset)
+    rgb_lin = _apply_baked_adjustments(rgb_lin, req)
     if req.heuristic_hdr_lift:
         rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
     else:
@@ -260,6 +393,68 @@ def create_hdri(req: HdriRequest):
         height=req.output_height,
         format="hdr_rgbe",
         panorama_mode=pano_mode,
+    )
+
+
+@app.get("/v1/config")
+def config():
+    """Non-secret hints for debugging (which panorama backend is active)."""
+    return {
+        "panorama_mode": get_mode(),
+        "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
+    }
+
+
+@app.post("/v1/hdri", response_model=HdriResponse)
+def create_hdri(req: HdriRequest):
+    return _generate_hdri(req)
+
+
+def _run_job(job_id: str, req: HdriRequest) -> None:
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+        _jobs[job_id]["updated_at"] = int(time.time())
+    try:
+        result = _generate_hdri(req)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "succeeded"
+            _jobs[job_id]["result"] = result.model_dump()
+            _jobs[job_id]["updated_at"] = int(time.time())
+    except Exception as e:
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(e)
+            _jobs[job_id]["updated_at"] = int(time.time())
+
+
+@app.post("/v1/jobs/hdri", response_model=HdriJobCreateResponse)
+def create_hdri_job(req: HdriRequest):
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "queued",
+            "created_at": int(time.time()),
+            "updated_at": int(time.time()),
+            "result": None,
+            "error": None,
+        }
+    t = threading.Thread(target=_run_job, args=(job_id, req), daemon=True)
+    t.start()
+    return HdriJobCreateResponse(job_id=job_id, status="queued")
+
+
+@app.get("/v1/jobs/{job_id}", response_model=HdriJobStatusResponse)
+def get_hdri_job(job_id: str):
+    with _jobs_lock:
+        row = _jobs.get(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if row["status"] == "succeeded" and row["result"]:
+        return HdriJobStatusResponse(job_id=job_id, status="succeeded", **row["result"])
+    return HdriJobStatusResponse(
+        job_id=job_id,
+        status=row["status"],
+        error=row.get("error"),
     )
 
 
