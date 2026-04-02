@@ -46,10 +46,11 @@ Worker env options (set in shell or `.env` for your worker process):
 ```env
 COMFYUI_SERVER_URL=http://127.0.0.1:8188
 COMFYUI_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_template.json
-COMFYUI_BASE_MODEL=flux1-dev.safetensors
-COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora.safetensors
+# Optional overrides (prefer workflow defaults if using exported API JSON)
+# COMFYUI_BASE_MODEL=flux-2-klein-base-4b.safetensors
+# COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors
 COMFYUI_BALANCED_STEPS=28
-COMFYUI_DEFAULT_STRENGTH=0.58
+COMFYUI_DEFAULT_STRENGTH=1.0
 ```
 
 Run:
@@ -74,7 +75,7 @@ Panel defaults for V1:
 
 - Output resolution: `2048x1024`
 - ERP layout: `single_front`
-- Reference coverage: `0.25`
+- Reference coverage: `0.60`
 - Seam fix: enabled
 
 ## 5) Benchmark quick check
