@@ -1,0 +1,231 @@
+{
+  "6": {
+    "inputs": {
+      "text": "Fill the green spaces according to the image. Outpaint as a seamless 360 equirectangular panorama (2:1). Keep the horizon level. Match left and right edges.",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 12345,
+      "steps": 20,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "63",
+        0
+      ],
+      "positive": [
+        "49",
+        0
+      ],
+      "negative": [
+        "55",
+        0
+      ],
+      "latent_image": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "33": {
+    "inputs": {
+      "text": "text, worst quality, blurry, ugly",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "43": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "44": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "48": {
+    "inputs": {
+      "unet_name": "flux-2-klein-base-4b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "49": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "52": {
+    "inputs": {
+      "pixels": [
+        "56",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "55": {
+    "inputs": {
+      "conditioning": [
+        "33",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "56": {
+    "inputs": {
+      "output_preset": "2048 x 1024",
+      "bg_color": "#00ff00",
+      "state_json": "{\"version\":1,\"projection_model\":\"pinhole_rectilinear\",\"alpha_mode\":\"straight\",\"bg_color\":\"#00ff00\",\"output_preset\":2048,\"assets\":{\"asset_5fa09958\":{\"type\":\"comfy_image\",\"filename\":\"f3725e2bf068252647604a95bab065d2.png\",\"subfolder\":\"panorama_stickers\",\"storage\":\"input\",\"name\":\"f3725e2bf068252647604a95bab065d2.png\"}},\"stickers\":[{\"id\":\"st_ddb5c31c\",\"asset_id\":\"asset_5fa09958\",\"yaw_deg\":19.318139450219178,\"pitch_deg\":3.175677993575242,\"hFOV_deg\":85.09761258907555,\"vFOV_deg\":85.09761258907555,\"rot_deg\":0,\"z_index\":1}],\"shots\":[],\"ui_settings\":{\"invert_view_x\":false,\"invert_view_y\":false,\"preview_quality\":\"balanced\"},\"active\":{\"selected_sticker_id\":null,\"selected_shot_id\":null}}",
+      "Open Stickers Editor": null
+    },
+    "class_type": "PanoramaStickers",
+    "_meta": {
+      "title": "Panorama Stickers"
+    }
+  },
+  "58": {
+    "inputs": {
+      "Open Preview": null,
+      "erp_image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PanoramaPreview",
+    "_meta": {
+      "title": "Panorama Preview"
+    }
+  },
+  "59": {
+    "inputs": {
+      "state_json": "{\"version\":1,\"projection_model\":\"pinhole_rectilinear\",\"alpha_mode\":\"straight\",\"bg_color\":\"#00ff00\",\"output_preset\":2048,\"assets\":{},\"stickers\":[],\"shots\":[{\"id\":\"sh_cd59dca1\",\"yaw_deg\":-40.26597661719347,\"pitch_deg\":9.592884798208313,\"hFOV_deg\":95.41452440211535,\"vFOV_deg\":59.634077751322096,\"roll_deg\":0,\"out_w\":1024,\"out_h\":1024,\"aspect_id\":\"1:1\"}],\"ui_settings\":{\"invert_view_x\":false,\"invert_view_y\":false,\"preview_quality\":\"balanced\"},\"active\":{\"selected_sticker_id\":null,\"selected_shot_id\":\"sh_cd59dca1\"}}",
+      "output_megapixels": 1,
+      "Open Cutout Editor": null,
+      "erp_image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PanoramaCutout",
+    "_meta": {
+      "title": "Panorama Cutout"
+    }
+  },
+  "60": {
+    "inputs": {
+      "images": [
+        "56",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "63": {
+    "inputs": {
+      "lora_name": "flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors",
+      "strength_model": 0.9,
+      "model": [
+        "48",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "59",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

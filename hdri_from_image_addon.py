@@ -408,7 +408,7 @@ class HDRI_API_Settings(PropertyGroup):
     reference_coverage: FloatProperty(
         name="Reference Coverage",
         description="How much panorama width the source image should occupy on control canvas",
-        default=0.40,
+        default=0.25,
         min=0.15,
         max=0.85,
     )

@@ -74,7 +74,7 @@ Panel defaults for V1:
 
 - Output resolution: `2048x1024`
 - ERP layout: `single_front`
-- Reference coverage: `0.40`
+- Reference coverage: `0.25`
 - Seam fix: enabled
 
 ## 5) Benchmark quick check

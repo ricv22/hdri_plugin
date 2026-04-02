@@ -36,7 +36,7 @@ class PanoramaRequest(BaseModel):
 
     # ERP placement controls
     erp_layout_mode: str = "single_front"
-    reference_coverage: float = Field(0.40, ge=0.15, le=0.85)
+    reference_coverage: float = Field(0.25, ge=0.15, le=0.85)
     erp_canvas_width: int | None = None
     erp_canvas_height: int | None = None
     seam_fix: bool | None = None
@@ -158,12 +158,155 @@ def _deep_replace(obj: Any, replacements: dict[str, Any]) -> Any:
     return obj
 
 
-def _extract_first_output_image(base_url: str, history_row: dict[str, Any]) -> bytes:
+def _coverage_to_fov_deg(reference_coverage: float) -> float:
+    # Tuned so 0.40 coverage stays near the previous 85 degree default.
+    fov = reference_coverage * 212.5
+    return max(35.0, min(140.0, fov))
+
+
+def _build_panorama_stickers_state_json(
+    control_name: str,
+    control_subfolder: str,
+    width: int,
+    reference_coverage: float,
+) -> str:
+    asset_id = "asset_uploaded"
+    sticker_id = "st_uploaded"
+    fov_deg = _coverage_to_fov_deg(reference_coverage)
+    state = {
+        "version": 1,
+        "projection_model": "pinhole_rectilinear",
+        "alpha_mode": "straight",
+        "bg_color": "#00ff00",
+        "output_preset": int(width),
+        "assets": {
+            asset_id: {
+                "type": "comfy_image",
+                "filename": control_name,
+                "subfolder": control_subfolder,
+                "storage": "input",
+                "name": control_name,
+            }
+        },
+        "stickers": [
+            {
+                "id": sticker_id,
+                "asset_id": asset_id,
+                "yaw_deg": 0.0,
+                "pitch_deg": 0.0,
+                "hFOV_deg": fov_deg,
+                "vFOV_deg": fov_deg,
+                "rot_deg": 0.0,
+                "z_index": 1,
+            }
+        ],
+        "shots": [],
+        "ui_settings": {
+            "invert_view_x": False,
+            "invert_view_y": False,
+            "preview_quality": "balanced",
+        },
+        "active": {"selected_sticker_id": sticker_id, "selected_shot_id": None},
+    }
+    return json.dumps(state, separators=(",", ":"))
+
+
+def _adapt_api_workflow_for_worker(
+    workflow: dict[str, Any],
+    *,
+    control_name: str,
+    control_subfolder: str,
+    request_prompt: str,
+    request_neg: str,
+    seed: int,
+    strength: float,
+    steps: int,
+    cfg: float,
+    body_width: int,
+    body_height: int,
+    reference_coverage: float,
+    lora_name: str,
+    base_model: str,
+) -> tuple[dict[str, Any], list[str]]:
+    vae_decode_id: str | None = None
+    panorama_cutout_ids: set[str] = set()
+
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type", ""))
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        if class_type == "VAEDecode" and vae_decode_id is None:
+            vae_decode_id = node_id
+        if class_type == "PanoramaCutout":
+            panorama_cutout_ids.add(node_id)
+
+        if class_type == "CLIPTextEncode":
+            title = str(node.get("_meta", {}).get("title", "")).lower()
+            if "negative" in title:
+                inputs["text"] = request_neg
+            else:
+                inputs["text"] = request_prompt
+        elif class_type == "KSampler":
+            inputs["seed"] = seed
+            inputs["steps"] = steps
+            inputs["cfg"] = cfg
+            inputs["denoise"] = strength
+        elif class_type == "LoraLoaderModelOnly":
+            if lora_name:
+                inputs["lora_name"] = lora_name
+        elif class_type == "UNETLoader":
+            if base_model:
+                inputs["unet_name"] = base_model
+        elif class_type == "PanoramaStickers":
+            inputs["output_preset"] = f"{body_width} x {body_height}"
+            inputs["bg_color"] = "#00ff00"
+            inputs["state_json"] = _build_panorama_stickers_state_json(
+                control_name=control_name,
+                control_subfolder=control_subfolder,
+                width=body_width,
+                reference_coverage=reference_coverage,
+            )
+
+    preferred_save_ids: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("class_type", "")) != "SaveImage":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        link = inputs.get("images")
+        if (
+            isinstance(link, list)
+            and len(link) >= 1
+            and isinstance(link[0], str)
+            and link[0] in panorama_cutout_ids
+            and vae_decode_id
+        ):
+            # Force full panorama output instead of PanoramaCutout output.
+            inputs["images"] = [vae_decode_id, 0]
+        preferred_save_ids.append(node_id)
+
+    return workflow, preferred_save_ids
+
+
+def _extract_output_image(base_url: str, history_row: dict[str, Any], preferred_node_ids: list[str] | None = None) -> bytes:
     outputs = history_row.get("outputs", {})
-    for node_data in outputs.values():
+    ordered_ids: list[str] = []
+    if preferred_node_ids:
+        ordered_ids.extend([nid for nid in preferred_node_ids if nid in outputs])
+    ordered_ids.extend([nid for nid in outputs.keys() if nid not in ordered_ids])
+
+    for node_id in ordered_ids:
+        node_data = outputs.get(node_id) or {}
         imgs = node_data.get("images") or []
-        if imgs:
-            item = imgs[0]
+        if imgs and isinstance(imgs, list):
+            item = imgs[-1]
             filename = item.get("filename")
             subfolder = item.get("subfolder", "")
             ftype = item.get("type", "output")
@@ -178,7 +321,7 @@ def _extract_first_output_image(base_url: str, history_row: dict[str, Any]) -> b
                 view_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", f"view?{q}")
                 with urllib.request.urlopen(view_url, timeout=120) as resp:
                     return resp.read()
-    raise RuntimeError("ComfyUI history had no output images.")
+    raise RuntimeError("ComfyUI history had no usable output images.")
 
 
 def run_comfyui_generation(
@@ -199,6 +342,7 @@ def run_comfyui_generation(
     uploaded_control = _multipart_upload_image(base_url, control_png, f"erp_control_{uuid.uuid4().hex}.png")
     uploaded_mask = _multipart_upload_image(base_url, mask_png, f"erp_mask_{uuid.uuid4().hex}.png")
     control_name = uploaded_control.get("name") or uploaded_control.get("filename")
+    control_subfolder = str(uploaded_control.get("subfolder", ""))
     mask_name = uploaded_mask.get("name") or uploaded_mask.get("filename")
     if not control_name or not mask_name:
         raise RuntimeError("ComfyUI upload did not return image names.")
@@ -233,6 +377,22 @@ def run_comfyui_generation(
         "__BASE_MODEL__": base_model,
     }
     workflow = _deep_replace(copy.deepcopy(workflow), replacements)
+    workflow, preferred_output_node_ids = _adapt_api_workflow_for_worker(
+        workflow,
+        control_name=control_name,
+        control_subfolder=control_subfolder,
+        request_prompt=request_prompt,
+        request_neg=request_neg,
+        seed=seed,
+        strength=strength,
+        steps=steps,
+        cfg=cfg,
+        body_width=body.width,
+        body_height=body.height,
+        reference_coverage=body.reference_coverage,
+        lora_name=lora_name,
+        base_model=base_model,
+    )
 
     client_id = str(uuid.uuid4())
     submit_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "prompt")
@@ -252,7 +412,7 @@ def run_comfyui_generation(
         if row and isinstance(row, dict):
             status = row.get("status", {})
             if status.get("status_str") in ("success", "completed") or row.get("outputs"):
-                raw = _extract_first_output_image(base_url, row)
+                raw = _extract_output_image(base_url, row, preferred_node_ids=preferred_output_node_ids)
                 out = Image.open(io.BytesIO(raw)).convert("RGB")
                 return out.resize((body.width, body.height), resample=Image.LANCZOS)
             if status.get("status_str") in ("error", "failed"):
