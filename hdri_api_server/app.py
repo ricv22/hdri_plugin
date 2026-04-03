@@ -38,6 +38,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
+from ai_hdr import reconstruct_ai_hdr
 from panorama import build_equirectangular, get_mode
 from rgbe_hdr import write_rgbe_hdr
 
@@ -109,9 +110,23 @@ class HdriRequest(BaseModel):
         description="Optional ERP control canvas height; must be 1/2 erp_canvas_width.",
     )
 
-    heuristic_hdr_lift: bool = Field(
-        True,
-        description="If True, apply server-side HDR boost (_fake_hdr_lift). If False, mild linear scale only (flatter).",
+    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "off"] | None = Field(
+        None,
+        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, off=flat linear export.",
+    )
+    heuristic_hdr_lift: bool | None = Field(
+        None,
+        description="Legacy compatibility toggle. If hdr_reconstruction_mode is omitted, True→heuristic, False→off.",
+    )
+    hdr_exposure_bias: float = Field(
+        0.0,
+        ge=-4.0,
+        le=4.0,
+        description="Exposure bias in EV applied after HDR reconstruction.",
+    )
+    hdr_model_name: str | None = Field(
+        None,
+        description="Optional AI HDR backend/model selector (e.g. embedded, torchscript).",
     )
     # Optional baked controls if the client wants the generated file itself adjusted.
     hue_shift: float = Field(0.0, ge=-1.0, le=1.0, description="Hue shift in normalized turns (-1..1).")
@@ -131,6 +146,7 @@ class HdriResponse(BaseModel):
     format: str = "hdr_rgbe"
     # How the 2:1 panorama was produced before HDR lift (see PANORAMA_MODE)
     panorama_mode: str = "resize"
+    hdr_reconstruction_mode: str = "heuristic"
 
 
 class HdriJobCreateResponse(BaseModel):
@@ -372,7 +388,25 @@ def _generate_hdri(req: HdriRequest) -> HdriResponse:
     rgb_lin = _srgb_to_linear(rgb)
     rgb_lin = _apply_preset(rgb_lin, req.preset)
     rgb_lin = _apply_baked_adjustments(rgb_lin, req)
-    if req.heuristic_hdr_lift:
+    hdr_mode = _resolve_hdr_mode(req)
+    if hdr_mode == "ai_fast":
+        try:
+            rgb_hdr = reconstruct_ai_hdr(
+                rgb_lin,
+                quality_mode=req.quality_mode,
+                exposure_bias=req.hdr_exposure_bias,
+                model_name=req.hdr_model_name,
+            )
+        except Exception as e:
+            failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
+            print(f"AI HDR failed ({e}); failover={failover}")
+            if failover == "off":
+                rgb_hdr = np.clip(rgb_lin.astype(np.float32) * 2.5, 0.0, None)
+                hdr_mode = "off"
+            else:
+                rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
+                hdr_mode = "heuristic"
+    elif hdr_mode == "heuristic":
         rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
     else:
         # Flatter: linear radiance ~ display linear, small headroom (user can raise Exposure in Blender)
@@ -393,14 +427,31 @@ def _generate_hdri(req: HdriRequest) -> HdriResponse:
         height=req.output_height,
         format="hdr_rgbe",
         panorama_mode=pano_mode,
+        hdr_reconstruction_mode=hdr_mode,
     )
+
+
+def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "off"]:
+    if req.hdr_reconstruction_mode is not None:
+        return req.hdr_reconstruction_mode
+    if req.heuristic_hdr_lift is not None:
+        return "heuristic" if req.heuristic_hdr_lift else "off"
+    default_mode = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
+    if default_mode not in {"heuristic", "ai_fast", "off"}:
+        return "ai_fast"
+    return default_mode  # type: ignore[return-value]
 
 
 @app.get("/v1/config")
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
+    hdr_default = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
+    if hdr_default not in {"heuristic", "ai_fast", "off"}:
+        hdr_default = "ai_fast"
     return {
         "panorama_mode": get_mode(),
+        "hdr_reconstruction_default": hdr_default,
+        "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
         "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
     }
 

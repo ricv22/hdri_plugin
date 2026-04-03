@@ -55,6 +55,8 @@ Example body:
   "erp_canvas_width": null,
   "erp_canvas_height": null,
   "panorama_extra": null,
+  "hdr_reconstruction_mode": "ai_fast",
+  "hdr_exposure_bias": 0.0,
   "hue_shift": 0.0,
   "sat_scale": 1.0,
   "blur_sigma": 0.0,
@@ -71,7 +73,8 @@ Response:
   "width": 2048,
   "height": 1024,
   "format": "hdr_rgbe",
-  "panorama_mode": "http_json"
+  "panorama_mode": "http_json",
+  "hdr_reconstruction_mode": "ai_fast"
 }
 ```
 
@@ -134,7 +137,7 @@ Base fields:
 ERP placement fields (V1):
 
 - `erp_layout_mode` (`single_front`)
-- `reference_coverage` (`0.15..0.85`, default `0.40`)
+- `reference_coverage` (`0.15..0.85`, default `0.60`)
 - `seam_fix` (optional bool, quality-based default if omitted)
 - `erp_canvas_width` / `erp_canvas_height` (optional 2:1 control canvas)
 
@@ -143,6 +146,28 @@ Response must include one of:
 - `image_b64`
 - `image_url`
 - `output_url`
+
+## HDR reconstruction modes
+
+The API applies HDR reconstruction after panorama generation and before `.hdr` export.
+
+Request field:
+
+- `hdr_reconstruction_mode`: `ai_fast` | `heuristic` | `off`
+- `hdr_exposure_bias`: EV offset applied after HDR reconstruction
+
+Mode behavior:
+
+- `ai_fast` (recommended): lightweight AI HDR reconstruction (`ai_hdr.py`)
+- `heuristic`: legacy `_fake_hdr_lift()` path
+- `off`: flat linear export (`rgb_lin * 2.5`)
+
+Server defaults / failover env:
+
+- `HDR_RECONSTRUCTION_MODE_DEFAULT=ai_fast`
+- `AI_HDR_FAILOVER_MODE=heuristic`
+- `AI_HDR_MODEL_NAME=embedded|torchscript`
+- `AI_HDR_MODEL_PATH=...` (required when using `torchscript`)
 
 ## ComfyUI configuration for the worker
 

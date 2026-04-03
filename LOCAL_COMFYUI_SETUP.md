@@ -25,6 +25,9 @@ In `hdri_api_server/.env`:
 ```env
 PANORAMA_MODE=http_json
 PANORAMA_HTTP_URL=http://127.0.0.1:8001/v1/panorama
+HDR_RECONSTRUCTION_MODE_DEFAULT=ai_fast
+AI_HDR_FAILOVER_MODE=heuristic
+AI_HDR_MODEL_NAME=embedded
 HDRI_PUBLIC_BASE_URL=http://127.0.0.1:8000
 HDRI_SIGNING_SECRET=change-me
 ```
@@ -70,6 +73,7 @@ Addon preferences:
 
 - API base URL: `http://127.0.0.1:8000`
 - Timeout: start with `180` or `300`
+- HDR reconstruction: `AI Fast` (recommended)
 
 Panel defaults for V1:
 
