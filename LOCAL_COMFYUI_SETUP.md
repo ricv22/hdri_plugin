@@ -25,6 +25,9 @@ In `hdri_api_server/.env`:
 ```env
 PANORAMA_MODE=http_json
 PANORAMA_HTTP_URL=http://127.0.0.1:8001/v1/panorama
+HDR_RECONSTRUCTION_MODE_DEFAULT=ai_fast
+AI_HDR_FAILOVER_MODE=heuristic
+AI_HDR_MODEL_NAME=embedded
 HDRI_PUBLIC_BASE_URL=http://127.0.0.1:8000
 HDRI_SIGNING_SECRET=change-me
 ```
@@ -46,10 +49,11 @@ Worker env options (set in shell or `.env` for your worker process):
 ```env
 COMFYUI_SERVER_URL=http://127.0.0.1:8188
 COMFYUI_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_template.json
-COMFYUI_BASE_MODEL=flux1-dev.safetensors
-COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora.safetensors
+# Optional overrides (prefer workflow defaults if using exported API JSON)
+# COMFYUI_BASE_MODEL=flux-2-klein-base-4b.safetensors
+# COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors
 COMFYUI_BALANCED_STEPS=28
-COMFYUI_DEFAULT_STRENGTH=0.58
+COMFYUI_DEFAULT_STRENGTH=1.0
 ```
 
 Run:
@@ -69,12 +73,13 @@ Addon preferences:
 
 - API base URL: `http://127.0.0.1:8000`
 - Timeout: start with `180` or `300`
+- HDR reconstruction: `AI Fast` (recommended)
 
 Panel defaults for V1:
 
 - Output resolution: `2048x1024`
 - ERP layout: `single_front`
-- Reference coverage: `0.25`
+- Reference coverage: `0.60`
 - Seam fix: enabled
 
 ## 5) Benchmark quick check

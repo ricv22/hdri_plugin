@@ -36,7 +36,7 @@ class PanoramaRequest(BaseModel):
 
     # ERP placement controls
     erp_layout_mode: str = "single_front"
-    reference_coverage: float = Field(0.25, ge=0.15, le=0.85)
+    reference_coverage: float = Field(0.60, ge=0.15, le=0.85)
     erp_canvas_width: int | None = None
     erp_canvas_height: int | None = None
     seam_fix: bool | None = None
@@ -73,6 +73,13 @@ def _default_seam_fix(mode: str) -> bool:
     if mode == "fast":
         return False
     return True
+
+
+def _workflow_has_node_type(workflow: dict[str, Any], class_type: str) -> bool:
+    for node in workflow.values():
+        if isinstance(node, dict) and str(node.get("class_type", "")) == class_type:
+            return True
+    return False
 
 
 def _seam_blend_wrap(pano: Image.Image, band_px: int) -> Image.Image:
@@ -356,11 +363,16 @@ def run_comfyui_generation(
         )
     request_neg = (body.negative_prompt or _env("COMFYUI_DEFAULT_NEGATIVE_PROMPT")).strip()
     seed = body.seed if body.seed is not None else int(time.time()) % 2_147_483_647
-    strength = body.strength if body.strength is not None else float(_env("COMFYUI_DEFAULT_STRENGTH", "0.58"))
+    strength = body.strength if body.strength is not None else float(_env("COMFYUI_DEFAULT_STRENGTH", "1.0"))
     steps = _quality_steps(body.quality_mode)
     cfg = float(_env("COMFYUI_CFG", "3.0"))
-    lora_name = _env("COMFYUI_KLEIN_LORA", "flux-2-klein-4B-360-erp-outpaint-lora.safetensors")
-    base_model = _env("COMFYUI_BASE_MODEL", "flux1-dev.safetensors")
+    lora_name = _env("COMFYUI_KLEIN_LORA", "")
+    base_model = _env("COMFYUI_BASE_MODEL", "")
+
+    # Panorama outpainting generally needs high denoise; lower values often preserve
+    # the green control canvas too aggressively.
+    if body.strength is None and _workflow_has_node_type(workflow, "PanoramaStickers"):
+        strength = max(0.95, strength)
 
     replacements: dict[str, Any] = {
         "__CONTROL_IMAGE_NAME__": control_name,

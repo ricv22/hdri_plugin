@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photo → HDRI World (API)",
     "author": "Cursor AI",
-    "version": (0, 1, 3),
+    "version": (0, 1, 4),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > HDRI",
     "description": "Upload a photo to an API, get a 2:1 HDRI (.hdr/.exr), apply to World lighting (Cycles).",
@@ -178,6 +178,162 @@ def _ensure_preview_sphere(name="HDRI_PreviewSphere"):
         obj.data.materials.append(mat)
 
     return obj
+
+
+_FAKE_GROUND_OBJ = "HDRI_FakeGround"
+_FAKE_GROUND_MAT = "HDRI_FakeGround_Mat"
+
+
+def _set_fake_ground_visible(visible: bool):
+    obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
+    if obj is None:
+        return
+    obj.hide_viewport = not visible
+    obj.hide_render = not visible
+
+
+def _ensure_fake_ground_object():
+    obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
+    if obj is not None and obj.type == "MESH":
+        return obj
+
+    mesh = bpy.data.meshes.new(_FAKE_GROUND_OBJ + "_Mesh")
+    obj = bpy.data.objects.new(_FAKE_GROUND_OBJ, mesh)
+    bpy.context.collection.objects.link(obj)
+
+    bm = None
+    try:
+        import bmesh
+
+        bm = bmesh.new()
+        bmesh.ops.create_plane(bm, size=2.0, calc_uvs=True)
+        bm.to_mesh(mesh)
+    finally:
+        if bm:
+            bm.free()
+
+    return obj
+
+
+def _rebuild_fake_ground_material(
+    img: bpy.types.Image,
+    mapping_src: bpy.types.Node,
+    mix_src: bpy.types.Node,
+    hue_sat_src: bpy.types.Node,
+    bg_src: bpy.types.Node,
+    lift: float,
+):
+    """Emissive ground using the same HDRI sampling as the world (blur + hue/sat + strength)."""
+    mat = bpy.data.materials.get(_FAKE_GROUND_MAT)
+    if mat is None:
+        mat = bpy.data.materials.new(_FAKE_GROUND_MAT)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    nodes.clear()
+
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.location = (400, 0)
+
+    try:
+        geom = nodes.new("ShaderNodeNewGeometry")
+    except (RuntimeError, TypeError):
+        geom = nodes.new("ShaderNodeGeometry")
+    geom.location = (-1400, 0)
+
+    vtf = nodes.new("ShaderNodeVectorTransform")
+    vtf.location = (-1200, 0)
+    vtf.vector_type = "POINT"
+    vtf.convert_from = "OBJECT"
+    vtf.convert_to = "WORLD"
+
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    sep.location = (-1000, 0)
+
+    comb = nodes.new("ShaderNodeCombineXYZ")
+    comb.location = (-800, 0)
+    comb.inputs["Z"].default_value = -float(lift)
+
+    norm = nodes.new("ShaderNodeVectorMath")
+    norm.location = (-600, 0)
+    norm.operation = "NORMALIZE"
+
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.location = (-400, 0)
+    rot = mapping_src.inputs["Rotation"].default_value
+    mapping.inputs["Rotation"].default_value[0] = rot[0]
+    mapping.inputs["Rotation"].default_value[1] = rot[1]
+    mapping.inputs["Rotation"].default_value[2] = rot[2]
+
+    env = nodes.new("ShaderNodeTexEnvironment")
+    env.location = (-200, 80)
+    env.image = img
+
+    env_blur = nodes.new("ShaderNodeTexEnvironment")
+    env_blur.location = (-200, -120)
+    env_blur.image = img
+    env_blur.label = "HDRI Blur Source"
+
+    mix = nodes.new("ShaderNodeMixRGB")
+    mix.location = (0, -40)
+    mix.blend_type = "MIX"
+    mix.inputs["Fac"].default_value = mix_src.inputs["Fac"].default_value
+
+    hue_sat = nodes.new("ShaderNodeHueSaturation")
+    hue_sat.location = (200, -40)
+    hue_sat.inputs["Hue"].default_value = hue_sat_src.inputs["Hue"].default_value
+    hue_sat.inputs["Saturation"].default_value = hue_sat_src.inputs["Saturation"].default_value
+
+    emit = nodes.new("ShaderNodeEmission")
+    emit.location = (320, 0)
+    emit.inputs["Strength"].default_value = bg_src.inputs["Strength"].default_value
+
+    links.new(geom.outputs["Position"], vtf.inputs["Vector"])
+    links.new(vtf.outputs["Vector"], sep.inputs["Vector"])
+    links.new(sep.outputs["X"], comb.inputs["X"])
+    links.new(sep.outputs["Y"], comb.inputs["Y"])
+    links.new(comb.outputs["Vector"], norm.inputs["Vector"])
+    links.new(norm.outputs["Vector"], mapping.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], env.inputs["Vector"])
+    links.new(mapping.outputs["Vector"], env_blur.inputs["Vector"])
+    links.new(env.outputs["Color"], mix.inputs["Color1"])
+    links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
+    links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
+    links.new(hue_sat.outputs["Color"], emit.inputs["Color"])
+    links.new(emit.outputs["Emission"], out.inputs["Surface"])
+
+    return mat
+
+
+def _apply_fake_ground(
+    settings,
+    img: bpy.types.Image,
+    mapping_node: bpy.types.Node,
+    mix_node: bpy.types.Node,
+    hue_sat_node: bpy.types.Node,
+    bg_node: bpy.types.Node,
+):
+    obj = _ensure_fake_ground_object()
+    mat = _rebuild_fake_ground_material(
+        img,
+        mapping_src=mapping_node,
+        mix_src=mix_node,
+        hue_sat_src=hue_sat_node,
+        bg_src=bg_node,
+        lift=settings.fake_ground_lift,
+    )
+    if obj.data.materials:
+        obj.data.materials[0] = mat
+    else:
+        obj.data.materials.append(mat)
+
+    obj.location = (0.0, 0.0, float(settings.fake_ground_z_offset))
+    s = float(settings.fake_ground_size) / 2.0
+    obj.scale = (s, s, 1.0)
+
+    obj.hide_viewport = False
+    obj.hide_render = False
 
 
 def _http_post_json(url: str, payload: dict, headers: dict, timeout_s: int):
@@ -359,6 +515,39 @@ class HDRI_API_Settings(PropertyGroup):
         default=False,
     )
 
+    fake_ground: BoolProperty(
+        name="Fake ground plane",
+        description=(
+            "Adds a large emissive floor that projects the lower part of the HDRI so the "
+            "environment reads as 3D ground + sky instead of a floating bubble"
+        ),
+        default=False,
+    )
+    fake_ground_size: FloatProperty(
+        name="Ground size",
+        description="Edge length of the ground plane (scene units)",
+        default=100.0,
+        min=1.0,
+        soft_max=1000.0,
+    )
+    fake_ground_z_offset: FloatProperty(
+        name="Ground Z",
+        description="Height of the plane (Z-up). Slightly below 0 avoids z-fighting with the grid",
+        default=-0.01,
+        min=-1000.0,
+        max=1000.0,
+    )
+    fake_ground_lift: FloatProperty(
+        name="Projection lift",
+        description=(
+            "Virtual Z used when sampling the panorama from the plane (higher = horizon "
+            "reaches the edges sooner; tweak if the floor looks too sky-like or too dark)"
+        ),
+        default=1.0,
+        min=0.01,
+        soft_max=10.0,
+    )
+
     # Option D: "Panorama diffusion endpoint + server HDR lift"
     provider: EnumProperty(
         name="Provider",
@@ -408,7 +597,7 @@ class HDRI_API_Settings(PropertyGroup):
     reference_coverage: FloatProperty(
         name="Reference Coverage",
         description="How much panorama width the source image should occupy on control canvas",
-        default=0.25,
+        default=0.60,
         min=0.15,
         max=0.85,
     )
@@ -432,9 +621,25 @@ class HDRI_API_Settings(PropertyGroup):
         max=8192,
     )
 
+    hdr_reconstruction_mode: EnumProperty(
+        name="HDR Reconstruction",
+        items=[
+            ("ai_fast", "AI Fast", "Use server-side AI HDR reconstruction (recommended)"),
+            ("heuristic", "Heuristic", "Legacy heuristic HDR lift"),
+            ("off", "Off", "Flat linear export (least boosted)"),
+        ],
+        default="ai_fast",
+    )
+    hdr_exposure_bias: FloatProperty(
+        name="HDR Exposure Bias (EV)",
+        description="Post-HDR exposure bias applied by server AI/heuristic stage",
+        default=0.0,
+        min=-4.0,
+        max=4.0,
+    )
     heuristic_hdr_lift: BoolProperty(
-        name="Server HDR boost",
-        description="If on, API applies aggressive heuristic HDR tonemap after panorama. Off = flatter (raise Exposure in Blender if needed)",
+        name="Legacy HDR boost toggle",
+        description="Backward compatibility only; use HDR Reconstruction mode instead",
         default=True,
     )
 
@@ -556,7 +761,10 @@ class HDRI_OT_apply_from_api(Operator):
             except json.JSONDecodeError as e:
                 self.report({"ERROR"}, f"Extra JSON invalid: {e}")
                 return {"CANCELLED"}
-        payload["heuristic_hdr_lift"] = bool(s.heuristic_hdr_lift)
+        payload["hdr_reconstruction_mode"] = s.hdr_reconstruction_mode
+        payload["hdr_exposure_bias"] = float(s.hdr_exposure_bias)
+        # Keep legacy field for older API versions.
+        payload["heuristic_hdr_lift"] = bool(s.hdr_reconstruction_mode == "heuristic")
         if s.bake_adjustments_on_server:
             payload["blur_sigma"] = float(s.blur_amount * 6.0)
             payload["hue_shift"] = float(s.hue_shift)
@@ -654,6 +862,18 @@ class HDRI_OT_apply_from_api(Operator):
             if s.add_preview_sphere:
                 _ensure_preview_sphere()
 
+            if s.fake_ground:
+                _apply_fake_ground(
+                    s,
+                    img,
+                    mapping_node,
+                    mix_node,
+                    hue_sat_node,
+                    bg_node,
+                )
+            else:
+                _set_fake_ground_visible(False)
+
         except Exception as e:
             self.report({"ERROR"}, f"Failed to apply HDRI: {e}")
             return {"CANCELLED"}
@@ -706,6 +926,12 @@ class HDRI_PT_panel(Panel):
         col.prop(s, "saturation")
         col.prop(s, "bake_adjustments_on_server")
         col.prop(s, "add_preview_sphere")
+        col.prop(s, "fake_ground")
+        fg = col.column(align=True)
+        fg.enabled = s.fake_ground
+        fg.prop(s, "fake_ground_size")
+        fg.prop(s, "fake_ground_z_offset")
+        fg.prop(s, "fake_ground_lift")
 
         box = layout.box()
         row = box.row(align=True)
@@ -745,7 +971,8 @@ class HDRI_PT_panel(Panel):
         row2.prop(s, "erp_canvas_width")
         row2.prop(s, "erp_canvas_height")
         col2.prop(s, "panorama_extra_json")
-        col2.prop(s, "heuristic_hdr_lift")
+        col2.prop(s, "hdr_reconstruction_mode")
+        col2.prop(s, "hdr_exposure_bias")
 
         col.separator()
         col.operator(HDRI_OT_apply_from_api.bl_idname, icon="WORLD")
