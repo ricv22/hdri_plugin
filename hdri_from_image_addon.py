@@ -20,6 +20,7 @@ from bpy.props import (
     BoolProperty,
     EnumProperty,
     FloatProperty,
+    FloatVectorProperty,
     IntProperty,
     PointerProperty,
     StringProperty,
@@ -76,17 +77,29 @@ def _ensure_world_nodes(world: bpy.types.World):
         env_blur.label = "HDRI Blur Source"
         env_blur.location = (-350, -220)
 
-    mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB"), None)
+    mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB" and n.label == "HDRI Blur Mix"), None)
+    if mix is None:
+        mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB"), None)
     if mix is None:
         mix = nodes.new("ShaderNodeMixRGB")
         mix.location = (-120, -80)
         mix.blend_type = "MIX"
         mix.inputs["Fac"].default_value = 0.0
+    mix.label = "HDRI Blur Mix"
 
     hue_sat = next((n for n in nodes if n.bl_idname == "ShaderNodeHueSaturation"), None)
     if hue_sat is None:
         hue_sat = nodes.new("ShaderNodeHueSaturation")
         hue_sat.location = (30, -80)
+
+    tint_mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB" and n.label == "HDRI Tint Mix"), None)
+    if tint_mix is None:
+        tint_mix = nodes.new("ShaderNodeMixRGB")
+        tint_mix.location = (110, -80)
+        tint_mix.blend_type = "MIX"
+        tint_mix.inputs["Fac"].default_value = 0.0
+        tint_mix.inputs["Color2"].default_value = (1.0, 1.0, 1.0, 1.0)
+    tint_mix.label = "HDRI Tint Mix"
 
     mapping = next((n for n in nodes if n.bl_idname == "ShaderNodeMapping"), None)
     if mapping is None:
@@ -110,14 +123,19 @@ def _ensure_world_nodes(world: bpy.types.World):
         links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
     if not hue_sat.inputs["Color"].is_linked:
         links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
-    if not bg.inputs["Color"].is_linked:
-        links.new(hue_sat.outputs["Color"], bg.inputs["Color"])
+    if not tint_mix.inputs["Color1"].is_linked:
+        links.new(hue_sat.outputs["Color"], tint_mix.inputs["Color1"])
+
+    for link in list(bg.inputs["Color"].links):
+        links.remove(link)
+    links.new(tint_mix.outputs["Color"], bg.inputs["Color"])
 
     return {
         "nt": nt,
         "env": env,
         "env_blur": env_blur,
         "mix": mix,
+        "tint_mix": tint_mix,
         "hue_sat": hue_sat,
         "bg": bg,
         "mapping": mapping,
@@ -192,26 +210,62 @@ def _set_fake_ground_visible(visible: bool):
     obj.hide_render = not visible
 
 
-def _ensure_fake_ground_object():
-    obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
-    if obj is not None and obj.type == "MESH":
-        return obj
-
-    mesh = bpy.data.meshes.new(_FAKE_GROUND_OBJ + "_Mesh")
-    obj = bpy.data.objects.new(_FAKE_GROUND_OBJ, mesh)
-    bpy.context.collection.objects.link(obj)
-
+def _build_fake_ground_mesh(mesh: bpy.types.Mesh):
+    """Fill mesh with a 2×2 XY quad (−1..1)."""
     bm = None
     try:
         import bmesh
 
         bm = bmesh.new()
-        bmesh.ops.create_plane(bm, size=2.0, calc_uvs=True)
+        v0 = bm.verts.new((-1.0, -1.0, 0.0))
+        v1 = bm.verts.new((1.0, -1.0, 0.0))
+        v2 = bm.verts.new((1.0, 1.0, 0.0))
+        v3 = bm.verts.new((-1.0, 1.0, 0.0))
+        bm.faces.new((v0, v1, v2, v3))
+        try:
+            bm.normal_update()
+        except AttributeError:
+            bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
         bm.to_mesh(mesh)
+        mesh.update()
     finally:
         if bm:
             bm.free()
 
+
+def _link_fake_ground_to_scene(context, obj: bpy.types.Object):
+    """Orphaned objects exist in bpy.data but are invisible — ensure scene membership."""
+    scene = getattr(context, "scene", None)
+    if scene is None:
+        return
+    if scene.objects.get(obj.name) is None:
+        try:
+            scene.collection.objects.link(obj)
+        except RuntimeError:
+            pass
+
+
+def _ensure_fake_ground_object(context):
+    obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
+    if obj is not None and obj.type == "MESH":
+        _link_fake_ground_to_scene(context, obj)
+        if len(obj.data.polygons) == 0:
+            _build_fake_ground_mesh(obj.data)
+        return obj
+
+    mesh = bpy.data.meshes.new(_FAKE_GROUND_OBJ + "_Mesh")
+    _build_fake_ground_mesh(mesh)
+    obj = bpy.data.objects.new(_FAKE_GROUND_OBJ, mesh)
+    col = getattr(context, "collection", None)
+    if col is None:
+        sc = getattr(context, "scene", None)
+        col = sc.collection if sc is not None else None
+    if col is not None:
+        try:
+            col.objects.link(obj)
+        except RuntimeError:
+            pass
+    _link_fake_ground_to_scene(context, obj)
     return obj
 
 
@@ -219,6 +273,7 @@ def _rebuild_fake_ground_material(
     img: bpy.types.Image,
     mapping_src: bpy.types.Node,
     mix_src: bpy.types.Node,
+    tint_mix_src: bpy.types.Node,
     hue_sat_src: bpy.types.Node,
     bg_src: bpy.types.Node,
     lift: float,
@@ -242,36 +297,38 @@ def _rebuild_fake_ground_material(
         geom = nodes.new("ShaderNodeGeometry")
     geom.location = (-1400, 0)
 
-    vtf = nodes.new("ShaderNodeVectorTransform")
-    vtf.location = (-1200, 0)
-    vtf.vector_type = "POINT"
-    vtf.convert_from = "OBJECT"
-    vtf.convert_to = "WORLD"
-
     sep = nodes.new("ShaderNodeSeparateXYZ")
-    sep.location = (-1000, 0)
+    sep.location = (-1200, 0)
 
     comb = nodes.new("ShaderNodeCombineXYZ")
-    comb.location = (-800, 0)
+    comb.location = (-1000, 0)
     comb.inputs["Z"].default_value = -float(lift)
 
     norm = nodes.new("ShaderNodeVectorMath")
-    norm.location = (-600, 0)
+    norm.location = (-800, 0)
     norm.operation = "NORMALIZE"
 
     mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = (-400, 0)
+    mapping.location = (-600, 0)
     rot = mapping_src.inputs["Rotation"].default_value
+    loc = mapping_src.inputs["Location"].default_value
+    scl = mapping_src.inputs["Scale"].default_value
+    mapping.inputs["Location"].default_value[0] = loc[0]
+    mapping.inputs["Location"].default_value[1] = loc[1]
+    mapping.inputs["Location"].default_value[2] = loc[2]
     mapping.inputs["Rotation"].default_value[0] = rot[0]
     mapping.inputs["Rotation"].default_value[1] = rot[1]
     mapping.inputs["Rotation"].default_value[2] = rot[2]
+    mapping.inputs["Scale"].default_value[0] = scl[0]
+    mapping.inputs["Scale"].default_value[1] = scl[1]
+    mapping.inputs["Scale"].default_value[2] = scl[2]
 
     env = nodes.new("ShaderNodeTexEnvironment")
-    env.location = (-200, 80)
+    env.location = (-400, 80)
     env.image = img
 
     env_blur = nodes.new("ShaderNodeTexEnvironment")
-    env_blur.location = (-200, -120)
+    env_blur.location = (-400, -120)
     env_blur.image = img
     env_blur.label = "HDRI Blur Source"
 
@@ -285,12 +342,18 @@ def _rebuild_fake_ground_material(
     hue_sat.inputs["Hue"].default_value = hue_sat_src.inputs["Hue"].default_value
     hue_sat.inputs["Saturation"].default_value = hue_sat_src.inputs["Saturation"].default_value
 
+    tint_mix = nodes.new("ShaderNodeMixRGB")
+    tint_mix.location = (260, -40)
+    tint_mix.blend_type = "MIX"
+    tint_mix.inputs["Fac"].default_value = tint_mix_src.inputs["Fac"].default_value
+    tint_color = tint_mix_src.inputs["Color2"].default_value
+    tint_mix.inputs["Color2"].default_value = (tint_color[0], tint_color[1], tint_color[2], 1.0)
+
     emit = nodes.new("ShaderNodeEmission")
-    emit.location = (320, 0)
+    emit.location = (420, 0)
     emit.inputs["Strength"].default_value = bg_src.inputs["Strength"].default_value
 
-    links.new(geom.outputs["Position"], vtf.inputs["Vector"])
-    links.new(vtf.outputs["Vector"], sep.inputs["Vector"])
+    links.new(geom.outputs["Position"], sep.inputs["Vector"])
     links.new(sep.outputs["X"], comb.inputs["X"])
     links.new(sep.outputs["Y"], comb.inputs["Y"])
     links.new(comb.outputs["Vector"], norm.inputs["Vector"])
@@ -300,25 +363,29 @@ def _rebuild_fake_ground_material(
     links.new(env.outputs["Color"], mix.inputs["Color1"])
     links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
     links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
-    links.new(hue_sat.outputs["Color"], emit.inputs["Color"])
+    links.new(hue_sat.outputs["Color"], tint_mix.inputs["Color1"])
+    links.new(tint_mix.outputs["Color"], emit.inputs["Color"])
     links.new(emit.outputs["Emission"], out.inputs["Surface"])
 
     return mat
 
 
 def _apply_fake_ground(
+    context,
     settings,
     img: bpy.types.Image,
     mapping_node: bpy.types.Node,
     mix_node: bpy.types.Node,
+    tint_mix_node: bpy.types.Node,
     hue_sat_node: bpy.types.Node,
     bg_node: bpy.types.Node,
 ):
-    obj = _ensure_fake_ground_object()
+    obj = _ensure_fake_ground_object(context)
     mat = _rebuild_fake_ground_material(
         img,
         mapping_src=mapping_node,
         mix_src=mix_node,
+        tint_mix_src=tint_mix_node,
         hue_sat_src=hue_sat_node,
         bg_src=bg_node,
         lift=settings.fake_ground_lift,
@@ -334,6 +401,71 @@ def _apply_fake_ground(
 
     obj.hide_viewport = False
     obj.hide_render = False
+
+
+def _apply_look_controls_to_nodes(
+    settings,
+    mapping_node: bpy.types.Node,
+    mix_node: bpy.types.Node,
+    tint_mix_node: bpy.types.Node,
+    hue_sat_node: bpy.types.Node,
+    bg_node: bpy.types.Node,
+):
+    mapping_node.inputs["Rotation"].default_value[0] = settings.pitch_degrees * (3.141592653589793 / 180.0)
+    mapping_node.inputs["Rotation"].default_value[1] = settings.roll_degrees * (3.141592653589793 / 180.0)
+    mapping_node.inputs["Rotation"].default_value[2] = settings.yaw_degrees * (3.141592653589793 / 180.0)
+    hue_sat_node.inputs["Hue"].default_value = 0.5 + settings.hue_shift
+    hue_sat_node.inputs["Saturation"].default_value = settings.saturation
+    mix_node.inputs["Fac"].default_value = settings.blur_amount
+    bg_node.inputs["Strength"].default_value = settings.exposure * settings.post_exposure
+
+    tint_mix_node.inputs["Fac"].default_value = settings.tint_strength
+    tint_mix_node.inputs["Color2"].default_value = (
+        settings.tint_color[0],
+        settings.tint_color[1],
+        settings.tint_color[2],
+        1.0,
+    )
+
+
+def _sync_world_and_ground_look(context, settings):
+    scene = getattr(context, "scene", None)
+    if scene is None or scene.world is None:
+        return
+    nodes = _ensure_world_nodes(scene.world)
+    _apply_look_controls_to_nodes(
+        settings,
+        nodes["mapping"],
+        nodes["mix"],
+        nodes["tint_mix"],
+        nodes["hue_sat"],
+        nodes["bg"],
+    )
+
+    img = nodes["env"].image
+    if settings.fake_ground and img is not None:
+        _apply_fake_ground(
+            context,
+            settings,
+            img,
+            nodes["mapping"],
+            nodes["mix"],
+            nodes["tint_mix"],
+            nodes["hue_sat"],
+            nodes["bg"],
+        )
+    else:
+        _set_fake_ground_visible(False)
+
+
+def _update_look_controls(self, context):
+    if context is None:
+        return
+    try:
+        _sync_world_and_ground_look(context, self)
+    except Exception:
+        # Property updates should not break UI interaction if nodes are not ready yet.
+        pass
 
 
 def _http_post_json(url: str, payload: dict, headers: dict, timeout_s: int):
@@ -452,6 +584,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=0.0,
         min=-180.0,
         max=180.0,
+        update=_update_look_controls,
     )
     pitch_degrees: FloatProperty(
         name="Pitch",
@@ -459,6 +592,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=0.0,
         min=-90.0,
         max=90.0,
+        update=_update_look_controls,
     )
     roll_degrees: FloatProperty(
         name="Roll",
@@ -466,6 +600,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=0.0,
         min=-180.0,
         max=180.0,
+        update=_update_look_controls,
     )
 
     exposure: FloatProperty(
@@ -474,6 +609,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=1.0,
         min=0.0,
         soft_max=10.0,
+        update=_update_look_controls,
     )
     post_exposure: FloatProperty(
         name="Post Exposure",
@@ -481,6 +617,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=1.0,
         min=0.0,
         soft_max=10.0,
+        update=_update_look_controls,
     )
     blur_amount: FloatProperty(
         name="Blur",
@@ -488,6 +625,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=0.0,
         min=0.0,
         max=1.0,
+        update=_update_look_controls,
     )
     hue_shift: FloatProperty(
         name="Hue Shift",
@@ -495,6 +633,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=0.0,
         min=-0.5,
         max=0.5,
+        update=_update_look_controls,
     )
     saturation: FloatProperty(
         name="Saturation",
@@ -502,6 +641,25 @@ class HDRI_API_Settings(PropertyGroup):
         default=1.0,
         min=0.0,
         max=2.0,
+        update=_update_look_controls,
+    )
+    tint_strength: FloatProperty(
+        name="Tint Amount",
+        description="Blend a tint color over the HDRI output (0 = off)",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+        update=_update_look_controls,
+    )
+    tint_color: FloatVectorProperty(
+        name="Tint Color",
+        description="Color picker tint for world and fake ground",
+        subtype="COLOR",
+        size=3,
+        min=0.0,
+        max=1.0,
+        default=(1.0, 1.0, 1.0),
+        update=_update_look_controls,
     )
     bake_adjustments_on_server: BoolProperty(
         name="Bake controls on server",
@@ -522,6 +680,7 @@ class HDRI_API_Settings(PropertyGroup):
             "environment reads as 3D ground + sky instead of a floating bubble"
         ),
         default=False,
+        update=_update_look_controls,
     )
     fake_ground_size: FloatProperty(
         name="Ground size",
@@ -529,6 +688,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=100.0,
         min=1.0,
         soft_max=1000.0,
+        update=_update_look_controls,
     )
     fake_ground_z_offset: FloatProperty(
         name="Ground Z",
@@ -536,6 +696,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=-0.01,
         min=-1000.0,
         max=1000.0,
+        update=_update_look_controls,
     )
     fake_ground_lift: FloatProperty(
         name="Projection lift",
@@ -546,6 +707,7 @@ class HDRI_API_Settings(PropertyGroup):
         default=1.0,
         min=0.01,
         soft_max=10.0,
+        update=_update_look_controls,
     )
 
     # Option D: "Panorama diffusion endpoint + server HDR lift"
@@ -728,6 +890,23 @@ class HDRI_OT_apply_from_api(Operator):
         if prefs.api_key:
             headers["Authorization"] = f"Bearer {prefs.api_key}"
 
+        # Hard-stop resize fallback. If this triggers, the wrong API mode/process is running.
+        try:
+            cfg = _http_get_json(f"{base}/v1/config", headers=headers, timeout_s=min(15.0, float(prefs.timeout_s)))
+            cfg_mode = str(cfg.get("panorama_mode", "")).strip().lower()
+            if cfg_mode == "resize":
+                s.server_config_panorama_mode = "resize"
+                self.report(
+                    {"ERROR"},
+                    "Server is in PANORAMA_MODE=resize. Start API with PANORAMA_MODE=http_json (and worker) to generate real panoramas.",
+                )
+                return {"CANCELLED"}
+            if cfg_mode:
+                s.server_config_panorama_mode = cfg_mode
+        except Exception:
+            # Do not block if /v1/config is unavailable; request path below may still succeed.
+            pass
+
         out_w, out_h = self._resolution_pair(s.output_resolution)
         payload = {
             "provider": s.provider,
@@ -782,6 +961,15 @@ class HDRI_OT_apply_from_api(Operator):
             return {"CANCELLED"}
         except Exception as e:
             self.report({"ERROR"}, f"API request failed: {e}")
+            return {"CANCELLED"}
+
+        # Safety net: block accidental resize responses from misconfigured servers.
+        if isinstance(resp, dict) and str(resp.get("panorama_mode", "")).strip().lower() == "resize":
+            s.last_panorama_mode = "resize"
+            self.report(
+                {"ERROR"},
+                "API returned panorama_mode=resize (stretched source image). Fix server mode to http_json and retry.",
+            )
             return {"CANCELLED"}
 
         # Prefer signed URL: hdri_url (Radiance .hdr) or exr_url (same URL or .exr)
@@ -839,6 +1027,7 @@ class HDRI_OT_apply_from_api(Operator):
             env_node = nodes["env"]
             env_blur_node = nodes["env_blur"]
             mix_node = nodes["mix"]
+            tint_mix_node = nodes["tint_mix"]
             hue_sat_node = nodes["hue_sat"]
             bg_node = nodes["bg"]
             mapping_node = nodes["mapping"]
@@ -850,24 +1039,27 @@ class HDRI_OT_apply_from_api(Operator):
             env_node.image = img
             env_blur_node.image = img
 
-            # Apply rotation and look controls.
-            mapping_node.inputs["Rotation"].default_value[0] = s.pitch_degrees * (3.141592653589793 / 180.0)
-            mapping_node.inputs["Rotation"].default_value[1] = s.roll_degrees * (3.141592653589793 / 180.0)
-            mapping_node.inputs["Rotation"].default_value[2] = s.yaw_degrees * (3.141592653589793 / 180.0)
-            hue_sat_node.inputs["Hue"].default_value = 0.5 + s.hue_shift
-            hue_sat_node.inputs["Saturation"].default_value = s.saturation
-            mix_node.inputs["Fac"].default_value = s.blur_amount
-            bg_node.inputs["Strength"].default_value = s.exposure * s.post_exposure
+            # Apply rotation/look controls and keep fake ground in sync.
+            _apply_look_controls_to_nodes(
+                s,
+                mapping_node,
+                mix_node,
+                tint_mix_node,
+                hue_sat_node,
+                bg_node,
+            )
 
             if s.add_preview_sphere:
                 _ensure_preview_sphere()
 
             if s.fake_ground:
                 _apply_fake_ground(
+                    context,
                     s,
                     img,
                     mapping_node,
                     mix_node,
+                    tint_mix_node,
                     hue_sat_node,
                     bg_node,
                 )
@@ -924,6 +1116,9 @@ class HDRI_PT_panel(Panel):
         col.prop(s, "blur_amount")
         col.prop(s, "hue_shift")
         col.prop(s, "saturation")
+        col.prop(s, "tint_strength")
+        col.prop(s, "tint_color")
+        col.template_color_picker(s, "tint_color", value_slider=True)
         col.prop(s, "bake_adjustments_on_server")
         col.prop(s, "add_preview_sphere")
         col.prop(s, "fake_ground")
