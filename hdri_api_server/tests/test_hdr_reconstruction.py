@@ -34,17 +34,17 @@ class AIHDRModuleTests(unittest.TestCase):
 
 class HDRFailoverTests(unittest.TestCase):
     @patch("app.write_rgbe_hdr", autospec=True)
-    @patch("app.build_equirectangular", autospec=True)
+    @patch("app._provider.wait_for_result", autospec=True)
     @patch("app.reconstruct_ai_hdr", autospec=True)
     @patch.dict("os.environ", {"AI_HDR_FAILOVER_MODE": "heuristic"}, clear=False)
     def test_ai_mode_falls_back_to_heuristic_on_failure(
         self,
         mock_reconstruct,
-        mock_build,
+        mock_wait,
         mock_write,
     ):
         mock_reconstruct.side_effect = RuntimeError("model unavailable")
-        mock_build.return_value = (Image.new("RGB", (1024, 512), (140, 120, 100)), "http_json")
+        mock_wait.return_value = (Image.new("RGB", (1024, 512), (140, 120, 100)), "http_json")
 
         req = app_mod.HdriRequest(
             image_b64="x",

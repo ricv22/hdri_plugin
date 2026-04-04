@@ -10,6 +10,7 @@ venv/
 # API server runtime output (signed-download artifacts)
 hdri_api_server/data/*.hdr
 hdri_api_server/data/*.exr
+hdri_api_server/data/*.sqlite3
 
 # OS / editor
 .DS_Store

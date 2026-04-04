@@ -499,6 +499,16 @@ def _download_bytes(url: str, headers: dict, timeout_s: int):
         return resp.read()
 
 
+def _safe_get_account(base_url: str, headers: dict, timeout_s: int) -> dict | None:
+    try:
+        data = _http_get_json(f"{base_url.rstrip('/')}/v1/account", headers=headers, timeout_s=timeout_s)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+
 class HDRI_API_Preferences(AddonPreferences):
     bl_idname = __name__
 
@@ -816,6 +826,27 @@ class HDRI_API_Settings(PropertyGroup):
         description="panorama_mode returned by the last successful Generate & Apply",
         default="",
     )
+    current_job_id: StringProperty(
+        name="Current Job ID",
+        description="Latest async job id returned by /v1/jobs/hdri",
+        default="",
+    )
+    current_job_status: StringProperty(
+        name="Current Job Status",
+        description="Current async job status (queued/running/succeeded/failed)",
+        default="",
+    )
+    last_job_error: StringProperty(
+        name="Last Job Error",
+        description="Last async job error message",
+        default="",
+    )
+    tokens_remaining: IntProperty(
+        name="Tokens Remaining",
+        description="Latest token balance returned by /v1/account (-1 means unknown)",
+        default=-1,
+        min=-1,
+    )
 
 
 class HDRI_OT_refresh_server_config(Operator):
@@ -884,7 +915,7 @@ class HDRI_OT_apply_from_api(Operator):
             return {"CANCELLED"}
 
         base = prefs.api_base_url.rstrip("/")
-        url = f"{base}/v1/hdri"
+        submit_url = f"{base}/v1/jobs/hdri"
 
         headers = {}
         if prefs.api_key:
@@ -951,7 +982,7 @@ class HDRI_OT_apply_from_api(Operator):
             payload["color_gain"] = float(s.post_exposure)
 
         try:
-            resp = _http_post_json(url, payload, headers=headers, timeout_s=int(prefs.timeout_s))
+            create_resp = _http_post_json(submit_url, payload, headers=headers, timeout_s=int(prefs.timeout_s))
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode("utf-8", errors="replace")
@@ -961,6 +992,54 @@ class HDRI_OT_apply_from_api(Operator):
             return {"CANCELLED"}
         except Exception as e:
             self.report({"ERROR"}, f"API request failed: {e}")
+            return {"CANCELLED"}
+
+        job_id = str(create_resp.get("job_id", "") if isinstance(create_resp, dict) else "").strip()
+        if not job_id:
+            self.report({"ERROR"}, "API response missing job_id.")
+            return {"CANCELLED"}
+        s.current_job_id = job_id
+        s.current_job_status = "queued"
+        s.last_job_error = ""
+
+        poll_url = f"{base}/v1/jobs/{job_id}"
+        poll_interval_s = 2.0
+        deadline = time.time() + float(prefs.timeout_s)
+        resp = None
+        while time.time() < deadline:
+            try:
+                status_resp = _http_get_json(poll_url, headers=headers, timeout_s=min(20, int(prefs.timeout_s)))
+            except Exception as e:
+                self.report({"ERROR"}, f"Polling failed: {e}")
+                return {"CANCELLED"}
+            if not isinstance(status_resp, dict):
+                self.report({"ERROR"}, "Invalid job status response.")
+                return {"CANCELLED"}
+            status = str(status_resp.get("status", "")).strip().lower()
+            if status:
+                s.current_job_status = status
+            if status in {"queued", "running"}:
+                time.sleep(poll_interval_s)
+                continue
+            if status == "failed":
+                err = str(status_resp.get("error", "Job failed without details."))
+                s.last_job_error = err
+                self.report({"ERROR"}, f"Job failed: {err[:300]}")
+                acct = _safe_get_account(base, headers, timeout_s=10)
+                if acct and "tokens_remaining" in acct:
+                    try:
+                        s.tokens_remaining = int(acct["tokens_remaining"])
+                    except Exception:
+                        pass
+                return {"CANCELLED"}
+            if status == "succeeded":
+                resp = status_resp
+                break
+            self.report({"ERROR"}, f"Unexpected job status: {status or '(missing)'}")
+            return {"CANCELLED"}
+
+        if resp is None:
+            self.report({"ERROR"}, "Job polling timed out.")
             return {"CANCELLED"}
 
         # Safety net: block accidental resize responses from misconfigured servers.
@@ -1073,6 +1152,13 @@ class HDRI_OT_apply_from_api(Operator):
         mode = resp.get("panorama_mode", "") if isinstance(resp, dict) else ""
         if mode:
             s.last_panorama_mode = str(mode)
+        s.current_job_status = "succeeded"
+        acct = _safe_get_account(base, headers, timeout_s=10)
+        if acct and "tokens_remaining" in acct:
+            try:
+                s.tokens_remaining = int(acct["tokens_remaining"])
+            except Exception:
+                pass
         if mode:
             if mode == "resize":
                 self.report(
@@ -1149,6 +1235,14 @@ class HDRI_PT_panel(Panel):
                 text="On the API host set PANORAMA_MODE=http_json and PANORAMA_HTTP_URL=…",
                 icon="INFO",
             )
+        if s.current_job_id:
+            box.label(text=f"Current job: {s.current_job_id}", icon="TIME")
+        if s.current_job_status:
+            box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
+        if s.last_job_error:
+            box.label(text=f"Last error: {s.last_job_error[:100]}", icon="ERROR")
+        if s.tokens_remaining >= 0:
+            box.label(text=f"Tokens remaining: {s.tokens_remaining}", icon="SOLO_ON")
 
         box.label(text="Panorama worker fields (http_json only)")
         box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")

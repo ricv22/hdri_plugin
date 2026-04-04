@@ -33,13 +33,17 @@ def _load_local_env() -> None:
 _load_local_env()
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
+from accounting import refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
 from ai_hdr import reconstruct_ai_hdr
-from panorama import build_equirectangular, get_mode
+from auth import auth_header_value, authenticate_account, bootstrap_dev_credentials, require_api_key_enabled
+from job_store import JobStore
+from panorama import get_mode
+from remote_provider import RemoteProvider
 from rgbe_hdr import write_rgbe_hdr
 
 APP_NAME = "HDRI API Server (MVP)"
@@ -47,6 +51,7 @@ APP_NAME = "HDRI API Server (MVP)"
 # Storage
 DATA_DIR = os.environ.get("HDRI_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.environ.get("HDRI_DB_PATH", os.path.join(DATA_DIR, "state.sqlite3"))
 
 # Signed URL (HMAC)
 SIGNING_SECRET = os.environ.get("HDRI_SIGNING_SECRET", "dev-secret-change-me").encode("utf-8")
@@ -157,13 +162,21 @@ class HdriJobCreateResponse(BaseModel):
 class HdriJobStatusResponse(BaseModel):
     job_id: str
     status: Literal["queued", "running", "succeeded", "failed"]
+    provider_job_id: str | None = None
     hdri_url: str | None = None
     exr_url: str | None = None
     width: int | None = None
     height: int | None = None
     format: str | None = None
     panorama_mode: str | None = None
+    hdr_reconstruction_mode: str | None = None
     error: str | None = None
+
+
+class AccountResponse(BaseModel):
+    account_id: str
+    tokens_remaining: int
+    api_key_required: bool
 
 
 def _b64_to_bytes(s: str) -> bytes:
@@ -334,8 +347,9 @@ def _verify(file_id: str, exp: int, sig: str) -> bool:
 
 
 app = FastAPI(title=APP_NAME)
-_jobs: dict[str, dict[str, Any]] = {}
-_jobs_lock = threading.Lock()
+_store = JobStore(DB_PATH)
+bootstrap_dev_credentials(_store)
+_provider = RemoteProvider()
 
 
 def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
@@ -363,19 +377,26 @@ def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
     return overrides
 
 
-def _generate_hdri(req: HdriRequest) -> HdriResponse:
+def _generate_hdri(
+    req: HdriRequest,
+    *,
+    provider_job_id: str | None = None,
+    panorama_overrides: dict[str, Any] | None = None,
+) -> HdriResponse:
     _validate_output_size(req.output_width, req.output_height)
 
-    panorama_overrides = _build_panorama_overrides(req)
+    if panorama_overrides is None:
+        panorama_overrides = _build_panorama_overrides(req)
 
     try:
-        im, pano_mode = build_equirectangular(
-            req.image_b64,
-            req.output_width,
-            req.output_height,
-            req.scene_mode,
-            req.quality_mode,
-            http_json_overrides=panorama_overrides or None,
+        im, pano_mode = _provider.wait_for_result(
+            provider_job_id=provider_job_id,
+            image_b64=req.image_b64,
+            width=req.output_width,
+            height=req.output_height,
+            scene_mode=req.scene_mode,
+            quality_mode=req.quality_mode,
+            overrides=panorama_overrides or None,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
@@ -457,55 +478,96 @@ def config():
 
 
 @app.post("/v1/hdri", response_model=HdriResponse)
-def create_hdri(req: HdriRequest):
+def create_hdri(req: HdriRequest, authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=require_api_key_enabled())
+    if not account["is_anonymous"]:
+        job_id = str(uuid.uuid4())
+        cost = token_cost_for_quality(req.quality_mode)
+        reserve_tokens_or_raise(_store, account["account_id"], job_id, cost)
+        try:
+            result = _generate_hdri(req)
+            return result
+        except Exception:
+            refund_tokens(_store, account["account_id"], job_id, cost)
+            raise
     return _generate_hdri(req)
 
 
-def _run_job(job_id: str, req: HdriRequest) -> None:
-    with _jobs_lock:
-        _jobs[job_id]["status"] = "running"
-        _jobs[job_id]["updated_at"] = int(time.time())
+def _run_job(job_id: str, req: HdriRequest, account_id: str | None) -> None:
+    panorama_overrides = _build_panorama_overrides(req)
+    provider_submit = _provider.submit_job(
+        image_b64=req.image_b64,
+        width=req.output_width,
+        height=req.output_height,
+        scene_mode=req.scene_mode,
+        quality_mode=req.quality_mode,
+        overrides=panorama_overrides or None,
+    )
+    _store.set_job_running(job_id, provider_job_id=provider_submit.provider_job_id)
     try:
-        result = _generate_hdri(req)
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "succeeded"
-            _jobs[job_id]["result"] = result.model_dump()
-            _jobs[job_id]["updated_at"] = int(time.time())
+        result = _generate_hdri(
+            req,
+            provider_job_id=provider_submit.provider_job_id,
+            panorama_overrides=panorama_overrides,
+        )
+        _store.set_job_succeeded(job_id, result.model_dump())
     except Exception as e:
-        with _jobs_lock:
-            _jobs[job_id]["status"] = "failed"
-            _jobs[job_id]["error"] = str(e)
-            _jobs[job_id]["updated_at"] = int(time.time())
+        _store.set_job_failed(job_id, str(e))
+        row = _store.get_job(job_id)
+        if row and account_id and not row["refunded"] and row["cost_tokens"] > 0:
+            refund_tokens(_store, account_id, job_id, row["cost_tokens"])
+            _store.mark_job_refunded(job_id)
 
 
 @app.post("/v1/jobs/hdri", response_model=HdriJobCreateResponse)
-def create_hdri_job(req: HdriRequest):
+def create_hdri_job(req: HdriRequest, authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=require_api_key_enabled())
     job_id = str(uuid.uuid4())
-    with _jobs_lock:
-        _jobs[job_id] = {
-            "status": "queued",
-            "created_at": int(time.time()),
-            "updated_at": int(time.time()),
-            "result": None,
-            "error": None,
-        }
-    t = threading.Thread(target=_run_job, args=(job_id, req), daemon=True)
+    cost = 0
+    account_id: str | None = None
+    if not account["is_anonymous"]:
+        account_id = account["account_id"]
+        cost = token_cost_for_quality(req.quality_mode)
+        reserve_tokens_or_raise(_store, account_id, job_id, cost)
+    _store.create_job(job_id, req.model_dump(), account_id=account_id, cost_tokens=cost)
+    t = threading.Thread(target=_run_job, args=(job_id, req, account_id), daemon=True)
     t.start()
     return HdriJobCreateResponse(job_id=job_id, status="queued")
 
 
 @app.get("/v1/jobs/{job_id}", response_model=HdriJobStatusResponse)
-def get_hdri_job(job_id: str):
-    with _jobs_lock:
-        row = _jobs.get(job_id)
+def get_hdri_job(job_id: str, authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=require_api_key_enabled())
+    row = _store.get_job(job_id)
     if not row:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if row["account_id"] and row["account_id"] != account["account_id"]:
+        raise HTTPException(status_code=404, detail="Job not found.")
     if row["status"] == "succeeded" and row["result"]:
-        return HdriJobStatusResponse(job_id=job_id, status="succeeded", **row["result"])
+        return HdriJobStatusResponse(
+            job_id=job_id,
+            status="succeeded",
+            provider_job_id=row.get("provider_job_id"),
+            **row["result"],
+        )
     return HdriJobStatusResponse(
         job_id=job_id,
         status=row["status"],
+        provider_job_id=row.get("provider_job_id"),
         error=row.get("error"),
+    )
+
+
+@app.get("/v1/account", response_model=AccountResponse)
+def get_account(authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=True)
+    row = _store.get_account(account["account_id"])
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    return AccountResponse(
+        account_id=row["account_id"],
+        tokens_remaining=row["tokens_remaining"],
+        api_key_required=require_api_key_enabled(),
     )
 
 

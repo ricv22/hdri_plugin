@@ -24,6 +24,11 @@ python -m venv .venv
 pip install -r requirements.txt
 $env:HDRI_PUBLIC_BASE_URL="http://127.0.0.1:8000"
 $env:HDRI_SIGNING_SECRET="change-me"
+# Optional hosted-mode auth/accounting:
+# $env:HDRI_REQUIRE_API_KEY="1"
+# $env:HDRI_BOOTSTRAP_API_KEY="dev-secret-key"
+# $env:HDRI_BOOTSTRAP_ACCOUNT_ID="dev-account"
+# $env:HDRI_BOOTSTRAP_TOKENS="25"
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
@@ -50,7 +55,7 @@ Example body:
   "panorama_seed": null,
   "panorama_strength": null,
   "erp_layout_mode": "single_front",
-  "reference_coverage": 0.4,
+  "reference_coverage": 0.6,
   "seam_fix": true,
   "erp_canvas_width": null,
   "erp_canvas_height": null,
@@ -93,6 +98,18 @@ Creates an async generation job and returns:
 
 Poll until `status` is `succeeded` or `failed`.
 
+### `GET /v1/account`
+
+Returns authenticated account usage:
+
+```json
+{
+  "account_id": "dev-account",
+  "tokens_remaining": 24,
+  "api_key_required": true
+}
+```
+
 ### `GET /v1/files/{id}.hdr?exp=...&sig=...`
 
 Downloads the HDR file.
@@ -100,6 +117,29 @@ Downloads the HDR file.
 ### `GET /v1/config`
 
 Shows active panorama backend (`panorama_mode`).
+
+## Authentication and tokens
+
+- `HDRI_REQUIRE_API_KEY=1` enforces Bearer auth on generation/job endpoints.
+- API keys are SHA-256 hashed in SQLite (`HDRI_DB_PATH`, default `data/state.sqlite3`).
+- Async jobs reserve tokens at creation (`fast=1`, `balanced=1`, `high=2`).
+- Failed jobs are refunded automatically.
+- For local testing, set `HDRI_BOOTSTRAP_API_KEY` to auto-create a dev account/key.
+
+## Remote provider adapter
+
+`app.py` now routes panorama generation through `remote_provider.py`.
+
+- `HDRI_REMOTE_PROVIDER=legacy` (default): use current `PANORAMA_MODE` behavior.
+- `HDRI_REMOTE_PROVIDER=runcomfy`: submit/poll hosted RunComfy jobs.
+
+RunComfy env (when using `runcomfy`):
+
+- `RUNCOMFY_API_TOKEN`
+- `RUNCOMFY_DEPLOYMENT_ID`
+- optional `RUNCOMFY_BASE_URL` (default `https://api.runcomfy.net`)
+- optional `RUNCOMFY_WORKFLOW_JSON_PATH` to send full `workflow_api_json`
+- optional `RUNCOMFY_POLL_TIMEOUT_S`
 
 ## Local ComfyUI worker (recommended for V1)
 
