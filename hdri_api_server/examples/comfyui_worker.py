@@ -20,6 +20,30 @@ try:
 except Exception:
     from erp_layout import build_single_front_erp_layout
 
+
+def _load_local_env() -> None:
+    """Load optional .env from hdri_api_server root without overriding OS env."""
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root_dir, ".env")
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except OSError:
+        pass
+
+
+_load_local_env()
+
 app = FastAPI(title="ComfyUI Panorama Worker", version="0.1.0")
 
 
@@ -234,6 +258,9 @@ def _adapt_api_workflow_for_worker(
     reference_coverage: float,
     lora_name: str,
     base_model: str,
+    clip_name1: str,
+    clip_name2: str,
+    vae_name: str,
 ) -> tuple[dict[str, Any], list[str]]:
     vae_decode_id: str | None = None
     panorama_cutout_ids: set[str] = set()
@@ -262,12 +289,32 @@ def _adapt_api_workflow_for_worker(
             inputs["steps"] = steps
             inputs["cfg"] = cfg
             inputs["denoise"] = strength
+        elif class_type == "CLIPTextEncodeFlux":
+            inputs["clip_l"] = request_neg if "negative" in str(node.get("_meta", {}).get("title", "")).lower() else request_prompt
+            inputs["t5xxl"] = request_neg if "negative" in str(node.get("_meta", {}).get("title", "")).lower() else request_prompt
+            inputs["guidance"] = cfg
         elif class_type == "LoraLoaderModelOnly":
             if lora_name:
                 inputs["lora_name"] = lora_name
+            inputs["strength_model"] = 1.0
         elif class_type == "UNETLoader":
             if base_model:
                 inputs["unet_name"] = base_model
+        elif class_type == "CLIPLoader":
+            if clip_name1:
+                inputs["clip_name"] = clip_name1
+        elif class_type == "DualCLIPLoader":
+            if clip_name1:
+                inputs["clip_name1"] = clip_name1
+            if clip_name2:
+                inputs["clip_name2"] = clip_name2
+            inputs["type"] = "flux"
+        elif class_type == "VAELoader":
+            if vae_name:
+                inputs["vae_name"] = vae_name
+        elif class_type == "ModelSamplingFlux":
+            inputs["width"] = body_width
+            inputs["height"] = body_height
         elif class_type == "PanoramaStickers":
             inputs["output_preset"] = f"{body_width} x {body_height}"
             inputs["bg_color"] = "#00ff00"
@@ -368,6 +415,9 @@ def run_comfyui_generation(
     cfg = float(_env("COMFYUI_CFG", "3.0"))
     lora_name = _env("COMFYUI_KLEIN_LORA", "")
     base_model = _env("COMFYUI_BASE_MODEL", "")
+    clip_name1 = _env("COMFYUI_CLIP_NAME1", "")
+    clip_name2 = _env("COMFYUI_CLIP_NAME2", clip_name1)
+    vae_name = _env("COMFYUI_VAE_NAME", "")
 
     # Panorama outpainting generally needs high denoise; lower values often preserve
     # the green control canvas too aggressively.
@@ -387,6 +437,9 @@ def run_comfyui_generation(
         "__CFG__": cfg,
         "__LORA_NAME__": lora_name,
         "__BASE_MODEL__": base_model,
+        "__CLIP_NAME1__": clip_name1,
+        "__CLIP_NAME2__": clip_name2,
+        "__VAE_NAME__": vae_name,
     }
     workflow = _deep_replace(copy.deepcopy(workflow), replacements)
     workflow, preferred_output_node_ids = _adapt_api_workflow_for_worker(
@@ -404,6 +457,9 @@ def run_comfyui_generation(
         reference_coverage=body.reference_coverage,
         lora_name=lora_name,
         base_model=base_model,
+        clip_name1=clip_name1,
+        clip_name2=clip_name2,
+        vae_name=vae_name,
     )
 
     client_id = str(uuid.uuid4())
