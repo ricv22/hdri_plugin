@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from accounting import refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
-from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr
+from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr, reconstruct_itm_hdr
 from auth import auth_header_value, authenticate_account, bootstrap_dev_credentials, require_api_key_enabled
 from job_store import JobStore
 from panorama import get_mode
@@ -115,9 +115,9 @@ class HdriRequest(BaseModel):
         description="Optional ERP control canvas height; must be 1/2 erp_canvas_width.",
     )
 
-    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "off"] | None = Field(
+    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "ai_itm", "off"] | None = Field(
         None,
-        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, off=flat linear export.",
+        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, ai_itm=emitter-aware inverse tone mapping, off=flat linear export.",
     )
     heuristic_hdr_lift: bool | None = Field(
         None,
@@ -391,14 +391,22 @@ def _generate_hdri(
     rgb_lin = _apply_preset(rgb_lin, req.preset)
     rgb_lin = _apply_baked_adjustments(rgb_lin, req)
     hdr_mode = _resolve_hdr_mode(req)
-    if hdr_mode == "ai_fast":
+    if hdr_mode in {"ai_fast", "ai_itm"}:
         try:
-            rgb_hdr = reconstruct_ai_hdr(
-                rgb_lin,
-                quality_mode=req.quality_mode,
-                exposure_bias=req.hdr_exposure_bias,
-                model_name=req.hdr_model_name,
-            )
+            if hdr_mode == "ai_itm":
+                rgb_hdr = reconstruct_itm_hdr(
+                    rgb_lin,
+                    quality_mode=req.quality_mode,
+                    exposure_bias=req.hdr_exposure_bias,
+                    model_name=req.hdr_model_name,
+                )
+            else:
+                rgb_hdr = reconstruct_ai_hdr(
+                    rgb_lin,
+                    quality_mode=req.quality_mode,
+                    exposure_bias=req.hdr_exposure_bias,
+                    model_name=req.hdr_model_name,
+                )
         except Exception as e:
             failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
             print(f"AI HDR failed ({e}); failover={failover}")
@@ -433,13 +441,13 @@ def _generate_hdri(
     )
 
 
-def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "off"]:
+def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "ai_itm", "off"]:
     if req.hdr_reconstruction_mode is not None:
         return req.hdr_reconstruction_mode
     if req.heuristic_hdr_lift is not None:
         return "heuristic" if req.heuristic_hdr_lift else "off"
     default_mode = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if default_mode not in {"heuristic", "ai_fast", "off"}:
+    if default_mode not in {"heuristic", "ai_fast", "ai_itm", "off"}:
         return "ai_fast"
     return default_mode  # type: ignore[return-value]
 
@@ -448,12 +456,13 @@ def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "off"
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
     hdr_default = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if hdr_default not in {"heuristic", "ai_fast", "off"}:
+    if hdr_default not in {"heuristic", "ai_fast", "ai_itm", "off"}:
         hdr_default = "ai_fast"
     return {
         "panorama_mode": get_mode(),
         "hdr_reconstruction_default": hdr_default,
         "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
+        "ai_hdr_itm_model_name": os.environ.get("AI_HDR_ITM_MODEL_NAME", "embedded"),
         "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
     }
 

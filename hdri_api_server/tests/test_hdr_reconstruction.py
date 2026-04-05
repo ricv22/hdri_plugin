@@ -21,6 +21,10 @@ class HDRModeContractTests(unittest.TestCase):
         req = app_mod.HdriRequest(image_b64="x", heuristic_hdr_lift=False)
         self.assertEqual(app_mod._resolve_hdr_mode(req), "off")
 
+    def test_resolve_mode_accepts_ai_itm(self):
+        req = app_mod.HdriRequest(image_b64="x", hdr_reconstruction_mode="ai_itm")
+        self.assertEqual(app_mod._resolve_hdr_mode(req), "ai_itm")
+
 
 class AIHDRModuleTests(unittest.TestCase):
     def test_embedded_ai_hdr_returns_non_negative_rgb(self):
@@ -41,6 +45,19 @@ class AIHDRModuleTests(unittest.TestCase):
         bright_gain = float(out[0, 2, 0] / rgb_lin[0, 2, 0])
         self.assertLess(mid_gain, 2.0)
         self.assertGreater(bright_gain, mid_gain)
+
+    def test_embedded_itm_hdr_pushes_clipped_highlights_harder_than_ai_fast(self):
+        rgb_lin = np.array(
+            [[[0.18, 0.16, 0.14], [0.45, 0.40, 0.35], [0.98, 0.94, 0.90]]],
+            dtype=np.float32,
+        )
+        fast = ai_hdr.reconstruct_ai_hdr(rgb_lin, quality_mode="balanced", model_name="embedded")
+        itm = ai_hdr.reconstruct_itm_hdr(rgb_lin, quality_mode="balanced", model_name="embedded")
+        fast_bright_gain = float(fast[0, 2, 0] / rgb_lin[0, 2, 0])
+        itm_mid_gain = float(itm[0, 1, 0] / rgb_lin[0, 1, 0])
+        itm_bright_gain = float(itm[0, 2, 0] / rgb_lin[0, 2, 0])
+        self.assertGreater(itm_bright_gain, fast_bright_gain)
+        self.assertGreater(itm_bright_gain, itm_mid_gain)
 
 
 class HeuristicHDRLiftTests(unittest.TestCase):
@@ -81,6 +98,29 @@ class HDRFailoverTests(unittest.TestCase):
             output_width=1024,
             output_height=512,
             hdr_reconstruction_mode="ai_fast",
+        )
+        res = app_mod._generate_hdri(req)
+        self.assertEqual(res.hdr_reconstruction_mode, "heuristic")
+        self.assertTrue(mock_write.called)
+
+    @patch("app.write_rgbe_hdr", autospec=True)
+    @patch("app._provider.wait_for_result", autospec=True)
+    @patch("app.reconstruct_itm_hdr", autospec=True)
+    @patch.dict("os.environ", {"AI_HDR_FAILOVER_MODE": "heuristic"}, clear=False)
+    def test_itm_mode_falls_back_to_heuristic_on_failure(
+        self,
+        mock_reconstruct,
+        mock_wait,
+        mock_write,
+    ):
+        mock_reconstruct.side_effect = RuntimeError("itm unavailable")
+        mock_wait.return_value = (Image.new("RGB", (1024, 512), (140, 120, 100)), "http_json")
+
+        req = app_mod.HdriRequest(
+            image_b64="x",
+            output_width=1024,
+            output_height=512,
+            hdr_reconstruction_mode="ai_itm",
         )
         res = app_mod._generate_hdri(req)
         self.assertEqual(res.hdr_reconstruction_mode, "heuristic")
