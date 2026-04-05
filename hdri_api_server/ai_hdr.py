@@ -11,16 +11,74 @@ except Exception:  # pragma: no cover - optional dependency
     torch = None  # type: ignore[assignment]
 
 
-def _softplus(x: np.ndarray) -> np.ndarray:
-    return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0.0)
+def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
+    if edge1 <= edge0:
+        return np.zeros_like(x, dtype=np.float32)
+    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return (1.0 / (1.0 + np.exp(-x))).astype(np.float32)
 
 
 def _quality_scale(quality_mode: str) -> float:
     if quality_mode == "fast":
-        return 1.05
+        return 1.0
     if quality_mode == "high":
-        return 1.45
-    return 1.25
+        return 1.18
+    return 1.08
+
+
+def _luminance_expand(
+    rgb_lin: np.ndarray,
+    *,
+    base_gain: float,
+    mid_gain: float,
+    source_gain: float,
+    source_desat: float,
+    learned_bias: np.ndarray | None = None,
+) -> np.ndarray:
+    x = np.clip(rgb_lin.astype(np.float32), 0.0, None)
+    lum = (0.2126 * x[..., 0] + 0.7152 * x[..., 1] + 0.0722 * x[..., 2])[..., None]
+    p50 = float(np.percentile(lum, 50))
+    p90 = float(np.percentile(lum, 90))
+    p97 = float(np.percentile(lum, 97))
+
+    mid_ref = max(p50, 0.10)
+    hot_ref = max(p97, p90 + 1e-3, mid_ref * 1.75)
+    mid_mask = _smoothstep(mid_ref * 0.5, mid_ref * 1.4, lum)
+    source_mask = _smoothstep(hot_ref * 0.82, hot_ref * 1.18, lum)
+
+    if learned_bias is not None:
+        base_gain = base_gain + learned_bias[..., 0:1] * 0.06
+        mid_gain = mid_gain * (0.9 + learned_bias[..., 1:2] * 0.25)
+        source_gain = source_gain * (0.75 + learned_bias[..., 2:3] * 0.45)
+
+    target_lum = lum * np.maximum(1.0, base_gain + mid_gain * mid_mask + source_gain * source_mask)
+    chroma = x / np.maximum(lum, 1e-4)
+    hdr = chroma * target_lum
+
+    # Slightly neutralize the hottest reconstructed emitters to avoid neon clipping artifacts.
+    neutral = np.repeat(target_lum, 3, axis=-1)
+    hdr = hdr * (1.0 - source_desat * source_mask) + neutral * (source_desat * source_mask)
+    return np.clip(hdr, 0.0, None).astype(np.float32)
+
+
+def reconstruct_heuristic_hdr(rgb_lin: np.ndarray, *, quality_mode: str) -> np.ndarray:
+    if quality_mode == "fast":
+        params = (1.08, 0.12, 0.70)
+    elif quality_mode == "high":
+        params = (1.18, 0.28, 1.80)
+    else:
+        params = (1.12, 0.20, 1.20)
+    return _luminance_expand(
+        rgb_lin,
+        base_gain=params[0],
+        mid_gain=params[1],
+        source_gain=params[2],
+        source_desat=0.10,
+    )
 
 
 def _embedded_neural_hdr(rgb_lin: np.ndarray, quality_mode: str) -> np.ndarray:
@@ -64,13 +122,24 @@ def _embedded_neural_hdr(rgb_lin: np.ndarray, quality_mode: str) -> np.ndarray:
     b2 = np.array([0.06, 0.06, 0.06, 0.08, 0.03], dtype=np.float32)
     h2 = np.maximum(0.0, np.tensordot(h1, w2, axes=([2], [0])) + b2)
 
-    scale = _quality_scale(quality_mode)
-    chroma_gain = 1.0 + _softplus(h2[..., :3]) * (0.22 * scale)
-    spec_gain = _softplus(h2[..., 3:4]) * (0.95 * scale)
-    base = x * chroma_gain
-    # AI-like highlight reconstruction from learned features.
-    hdr = base + lum * spec_gain
-    return np.clip(hdr, 0.0, None).astype(np.float32)
+    if quality_mode == "fast":
+        base_gain, mid_gain, source_gain = 1.10, 0.14, 0.90
+    elif quality_mode == "high":
+        base_gain, mid_gain, source_gain = 1.22, 0.32, 2.30
+    else:
+        base_gain, mid_gain, source_gain = 1.15, 0.24, 1.55
+
+    learned_bias = _sigmoid(h2[..., :3])
+    hdr = _luminance_expand(
+        x,
+        base_gain=base_gain,
+        mid_gain=mid_gain,
+        source_gain=source_gain,
+        source_desat=0.12,
+        learned_bias=learned_bias,
+    )
+    # Keep a modest quality-dependent amplification so higher quality modes remain meaningfully punchier.
+    return np.clip(hdr * _quality_scale(quality_mode), 0.0, None).astype(np.float32)
 
 
 @lru_cache(maxsize=1)

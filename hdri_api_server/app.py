@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from accounting import refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
-from ai_hdr import reconstruct_ai_hdr
+from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr
 from auth import auth_header_value, authenticate_account, bootstrap_dev_credentials, require_api_key_enabled
 from job_store import JobStore
 from panorama import get_mode
@@ -233,26 +233,7 @@ def _apply_preset(rgb_lin: np.ndarray, preset: str) -> np.ndarray:
 
 
 def _fake_hdr_lift(rgb_lin: np.ndarray, quality_mode: str) -> np.ndarray:
-    if quality_mode == "fast":
-        boost, knee = 6.0, 0.6
-    elif quality_mode == "balanced":
-        boost, knee = 12.0, 0.5
-    else:
-        boost, knee = 18.0, 0.45
-
-    lum = 0.2126 * rgb_lin[..., 0] + 0.7152 * rgb_lin[..., 1] + 0.0722 * rgb_lin[..., 2]
-    lum = lum[..., None]
-    t = np.clip((lum - knee) / max(1e-6, (1.0 - knee)), 0.0, 1.0)
-    gain = 1.0 + t * boost
-    out = rgb_lin * gain
-
-    h = out.shape[0]
-    y = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None, None]
-    sky = 1.0 + 0.35 * (1.0 - y)
-    ground = 1.0 - 0.15 * y
-    out = out * (sky * ground)
-
-    return np.clip(out, 0.0, None).astype(np.float32)
+    return reconstruct_heuristic_hdr(rgb_lin, quality_mode=quality_mode)
 
 
 def _rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
