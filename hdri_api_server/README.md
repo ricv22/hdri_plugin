@@ -212,6 +212,40 @@ Server defaults / failover env:
 - `AI_HDR_ITM_MODEL_NAME=embedded|torchscript`
 - `AI_HDR_ITM_MODEL_PATH=...` (optional; falls back to `AI_HDR_MODEL_PATH`)
 
+## Training a real `ai_itm` model
+
+The repo now includes a first training/export path under `training/`.
+
+Install training deps:
+
+```powershell
+cd hdri_api_server
+python3 -m pip install --user -r requirements-train.txt
+```
+
+Train on a folder of true HDR panoramas (`.hdr`, `.npy`, or `.npz`):
+
+```powershell
+cd hdri_api_server
+python3 -m training.train_itm --dataset-root D:\hdr_panos --output-dir training_runs\itm_v1
+```
+
+Export the best checkpoint to TorchScript:
+
+```powershell
+cd hdri_api_server
+python3 -m training.export_itm_torchscript --checkpoint training_runs\itm_v1\best.pt --output training_runs\itm_v1\itm_model.ts
+```
+
+Use the trained model in the API:
+
+```powershell
+$env:AI_HDR_ITM_MODEL_NAME="torchscript"
+$env:AI_HDR_ITM_MODEL_PATH="D:\path\to\itm_model.ts"
+```
+
+See `training/README.md` for details.
+
 ## ComfyUI configuration for the worker
 
 Environment variables used by `examples/comfyui_worker.py`:
