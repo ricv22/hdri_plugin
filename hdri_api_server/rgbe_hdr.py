@@ -109,3 +109,29 @@ def read_rgbe_hdr(path: str) -> np.ndarray:
 
     rgbe = np.frombuffer(data, dtype=np.uint8).reshape(height, width, 4)
     return rgbe2float(rgbe)
+
+
+def read_rgbe_hdr_bytes(data: bytes) -> np.ndarray:
+    """
+    Read a flat RGBE Radiance .hdr file from bytes.
+    Returns float32 linear RGB with shape (H, W, 3).
+    """
+    newline = b"\n"
+    header_end = data.find(b"-Y ")
+    if header_end < 0:
+        raise ValueError("Invalid HDR file: missing resolution line")
+    resolution_end = data.find(newline, header_end)
+    if resolution_end < 0:
+        raise ValueError("Invalid HDR file: unterminated resolution line")
+    resolution_line = data[header_end:resolution_end].decode("ascii", errors="strict")
+    resolution = resolution_line.split()
+    if len(resolution) != 4 or resolution[0] != "-Y" or resolution[2] != "+X":
+        raise ValueError("Unsupported HDR resolution header")
+    height = int(resolution[1])
+    width = int(resolution[3])
+    payload = data[resolution_end + 1 :]
+    expected = height * width * 4
+    if len(payload) != expected:
+        raise ValueError(f"Unexpected HDR payload size: expected {expected} bytes, got {len(payload)}")
+    rgbe = np.frombuffer(payload, dtype=np.uint8).reshape(height, width, 4)
+    return rgbe2float(rgbe)
