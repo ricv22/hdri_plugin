@@ -193,13 +193,14 @@ The API applies HDR reconstruction after panorama generation and before `.hdr` e
 
 Request field:
 
-- `hdr_reconstruction_mode`: `ai_fast` | `heuristic` | `off`
+- `hdr_reconstruction_mode`: `ai_fast` | `comfyui_hdr` | `heuristic` | `off`
 - `hdr_exposure_bias`: EV offset applied after HDR reconstruction
 
 Mode behavior:
 
-- `ai_fast` (recommended): lightweight AI HDR reconstruction (`ai_hdr.py`)
-- `heuristic`: legacy `_fake_hdr_lift()` path
+- `ai_fast` (recommended fallback/default): lightweight in-process AI HDR reconstruction (`ai_hdr.py`)
+- `comfyui_hdr`: call a second ComfyUI workflow to restore HDR-like highlight range after panorama generation
+- `heuristic`: conservative local lift path
 - `off`: flat linear export (`rgb_lin * 2.5`)
 
 Server defaults / failover env:
@@ -208,6 +209,11 @@ Server defaults / failover env:
 - `AI_HDR_FAILOVER_MODE=heuristic`
 - `AI_HDR_MODEL_NAME=embedded|torchscript`
 - `AI_HDR_MODEL_PATH=...` (required when using `torchscript`)
+- `HDR_HTTP_URL=...` (used when `hdr_reconstruction_mode=comfyui_hdr`; typically `http://127.0.0.1:8001/v1/hdr_restore`)
+- optional `HDR_HTTP_API_KEY`
+- optional `HDR_HTTP_HEADERS_JSON`
+- optional `HDR_HTTP_BODY_JSON`
+- optional `HDR_HTTP_TIMEOUT_S`
 
 ## ComfyUI configuration for the worker
 
@@ -224,6 +230,13 @@ Environment variables used by `examples/comfyui_worker.py`:
 - `COMFYUI_DEFAULT_NEGATIVE_PROMPT`
 - `COMFYUI_POLL_TIMEOUT_S`
 - `COMFYUI_POLL_INTERVAL_S`
+- `COMFYUI_HDR_WORKFLOW_TEMPLATE` (optional dedicated ComfyUI API JSON for HDR restore stage)
+- `COMFYUI_HDR_DEFAULT_PROMPT`
+- `COMFYUI_HDR_DEFAULT_NEGATIVE_PROMPT`
+- `COMFYUI_HDR_FAST_STEPS` / `COMFYUI_HDR_BALANCED_STEPS` / `COMFYUI_HDR_HIGH_STEPS`
+- `COMFYUI_HDR_CFG`
+- `COMFYUI_HDR_DEFAULT_STRENGTH`
+- `COMFYUI_HDR_OUTPUT_NODE_IDS` (optional comma-separated preferred save/output node ids)
 
 The included workflow template is a starter baseline.  
 You will usually adapt node IDs/inputs to your actual ComfyUI graph.

@@ -376,6 +376,54 @@ def panorama_http_json(
     return pano.convert("RGB").resize((width, height), resample=Image.BICUBIC)
 
 
+def hdr_http_json(
+    image_b64: str,
+    width: int,
+    height: int,
+    quality_mode: str,
+    request_overrides: dict[str, Any] | None = None,
+) -> Image.Image:
+    url = os.environ.get("HDR_HTTP_URL", "").strip()
+    if not url:
+        raise RuntimeError("hdr_reconstruction_mode=comfyui_hdr requires HDR_HTTP_URL")
+
+    headers: dict[str, str] = {}
+    hk = os.environ.get("HDR_HTTP_HEADERS_JSON", "").strip()
+    if hk:
+        headers = {str(k): str(v) for k, v in json.loads(hk).items()}
+    api_key = os.environ.get("HDR_HTTP_API_KEY", "").strip()
+    if api_key:
+        headers.setdefault("Authorization", f"Bearer {api_key}")
+
+    payload: dict[str, Any] = {
+        "image_b64": image_b64,
+        "width": width,
+        "height": height,
+        "quality_mode": quality_mode,
+    }
+    extra = os.environ.get("HDR_HTTP_BODY_JSON", "").strip()
+    if extra:
+        payload.update(json.loads(extra))
+    if request_overrides:
+        payload.update(request_overrides)
+
+    data = _http_json_request(url, payload, headers, timeout_s=int(os.environ.get("HDR_HTTP_TIMEOUT_S", "300")))
+
+    if "image_b64" in data:
+        raw = base64.b64decode(data["image_b64"])
+        pano = Image.open(io.BytesIO(raw))
+    elif "image_url" in data:
+        raw = _download_url(str(data["image_url"]))
+        pano = Image.open(io.BytesIO(raw))
+    elif "output_url" in data:
+        raw = _download_url(str(data["output_url"]))
+        pano = Image.open(io.BytesIO(raw))
+    else:
+        raise RuntimeError(f"hdr_http_json: expected image_b64, image_url, or output_url in response, got keys: {list(data)}")
+
+    return pano.convert("RGB").resize((width, height), resample=Image.BICUBIC)
+
+
 def _decode_image_b64(image_b64: str) -> bytes:
     try:
         return base64.b64decode(image_b64, validate=True)
