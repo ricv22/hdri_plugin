@@ -81,19 +81,6 @@ class HDRRestoreRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class HDRRestoreRequest(BaseModel):
-    image_b64: str
-    width: int = 2048
-    height: int = 1024
-    quality_mode: str = "balanced"
-    prompt: str | None = None
-    negative_prompt: str | None = None
-    strength: float | None = Field(None, ge=0.0, le=1.0)
-    seed: int | None = None
-
-    model_config = {"extra": "allow"}
-
-
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -123,6 +110,14 @@ def _quality_steps(mode: str) -> int:
     if mode == "high":
         return int(_env("COMFYUI_HIGH_STEPS", "36"))
     return int(_env("COMFYUI_BALANCED_STEPS", "28"))
+
+
+def _hdr_quality_steps(mode: str) -> int:
+    if mode == "fast":
+        return int(_env("COMFYUI_HDR_FAST_STEPS", "18"))
+    if mode == "high":
+        return int(_env("COMFYUI_HDR_HIGH_STEPS", "36"))
+    return int(_env("COMFYUI_HDR_BALANCED_STEPS", "28"))
 
 
 def _default_seam_fix(mode: str) -> bool:
@@ -410,6 +405,56 @@ def _extract_output_image(base_url: str, history_row: dict[str, Any], preferred_
     raise RuntimeError("ComfyUI history had no usable output images.")
 
 
+def _submit_and_wait_for_output(
+    *,
+    base_url: str,
+    workflow: dict[str, Any],
+    preferred_output_node_ids: list[str] | None = None,
+) -> bytes:
+    client_id = str(uuid.uuid4())
+    submit_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "prompt")
+    submitted = _json_request(submit_url, {"prompt": workflow, "client_id": client_id}, timeout_s=120)
+    prompt_id = submitted.get("prompt_id")
+    if not prompt_id:
+        raise RuntimeError(f"ComfyUI prompt submission failed: {submitted}")
+
+    history_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", f"history/{prompt_id}")
+    timeout_s = int(_env("COMFYUI_POLL_TIMEOUT_S", "900"))
+    interval_s = float(_env("COMFYUI_POLL_INTERVAL_S", "1.5"))
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        with urllib.request.urlopen(history_url, timeout=120) as resp:
+            history = json.loads(resp.read().decode("utf-8"))
+        row = history.get(prompt_id)
+        if row and isinstance(row, dict):
+            status = row.get("status", {})
+            if status.get("status_str") in ("success", "completed") or row.get("outputs"):
+                return _extract_output_image(base_url, row, preferred_node_ids=preferred_output_node_ids)
+            if status.get("status_str") in ("error", "failed"):
+                raise RuntimeError(f"ComfyUI generation failed: {status}")
+        time.sleep(interval_s)
+    raise RuntimeError("ComfyUI generation timed out.")
+
+
+def _preferred_save_nodes(workflow: dict[str, Any], env_name: str) -> list[str]:
+    configured = _env(env_name, "")
+    if configured:
+        return [item.strip() for item in configured.split(",") if item.strip()]
+    return [
+        node_id
+        for node_id, node in workflow.items()
+        if isinstance(node, dict) and str(node.get("class_type", "")) == "SaveImage"
+    ]
+
+
+def _uploaded_image_path(uploaded: dict[str, Any]) -> str:
+    name = str(uploaded.get("name") or uploaded.get("filename") or "").strip()
+    if not name:
+        raise RuntimeError("ComfyUI upload did not return an image name.")
+    subfolder = str(uploaded.get("subfolder", "")).strip().strip("/")
+    return f"{subfolder}/{name}" if subfolder else name
+
+
 def run_comfyui_generation(
     body: PanoramaRequest,
     control_png: bytes,
@@ -494,31 +539,120 @@ def run_comfyui_generation(
         vae_name=vae_name,
     )
 
-    client_id = str(uuid.uuid4())
-    submit_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "prompt")
-    submitted = _json_request(submit_url, {"prompt": workflow, "client_id": client_id}, timeout_s=120)
-    prompt_id = submitted.get("prompt_id")
-    if not prompt_id:
-        raise RuntimeError(f"ComfyUI prompt submission failed: {submitted}")
+    raw = _submit_and_wait_for_output(
+        base_url=base_url,
+        workflow=workflow,
+        preferred_output_node_ids=preferred_output_node_ids,
+    )
+    out = Image.open(io.BytesIO(raw)).convert("RGB")
+    return out.resize((body.width, body.height), resample=Image.LANCZOS)
 
-    history_url = urllib.parse.urljoin(base_url.rstrip("/") + "/", f"history/{prompt_id}")
-    timeout_s = int(_env("COMFYUI_POLL_TIMEOUT_S", "900"))
-    interval_s = float(_env("COMFYUI_POLL_INTERVAL_S", "1.5"))
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        with urllib.request.urlopen(history_url, timeout=120) as resp:
-            history = json.loads(resp.read().decode("utf-8"))
-        row = history.get(prompt_id)
-        if row and isinstance(row, dict):
-            status = row.get("status", {})
-            if status.get("status_str") in ("success", "completed") or row.get("outputs"):
-                raw = _extract_output_image(base_url, row, preferred_node_ids=preferred_output_node_ids)
-                out = Image.open(io.BytesIO(raw)).convert("RGB")
-                return out.resize((body.width, body.height), resample=Image.LANCZOS)
-            if status.get("status_str") in ("error", "failed"):
-                raise RuntimeError(f"ComfyUI generation failed: {status}")
-        time.sleep(interval_s)
-    raise RuntimeError("ComfyUI generation timed out.")
+
+def run_comfyui_hdr_restore(body: HDRRestoreRequest, input_image: Image.Image) -> Image.Image:
+    base_url = _env("COMFYUI_SERVER_URL", "http://127.0.0.1:8188")
+    template_path = _env(
+        "COMFYUI_HDR_WORKFLOW_TEMPLATE",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfyui_flux2_klein_4b_hdr_restore_api.json"),
+    )
+    if not os.path.isfile(template_path):
+        raise RuntimeError(
+            "ComfyUI HDR workflow template not found. Set COMFYUI_HDR_WORKFLOW_TEMPLATE to your HDR restore JSON."
+        )
+
+    upload_buf = io.BytesIO()
+    input_image.convert("RGB").save(upload_buf, format="PNG")
+    uploaded_input = _multipart_upload_image(base_url, upload_buf.getvalue(), f"hdr_input_{uuid.uuid4().hex}.png")
+    input_image_path = _uploaded_image_path(uploaded_input)
+
+    workflow = _load_workflow_template(template_path)
+    request_prompt = (body.prompt or _env("COMFYUI_HDR_DEFAULT_PROMPT")).strip()
+    if not request_prompt:
+        request_prompt = (
+            "Restore plausible HDR highlight range from this equirectangular panorama. "
+            "Keep geometry, horizon, reflections, and overall composition stable."
+        )
+    request_neg = (body.negative_prompt or _env("COMFYUI_HDR_DEFAULT_NEGATIVE_PROMPT")).strip()
+    seed = body.seed if body.seed is not None else int(time.time()) % 2_147_483_647
+    strength = body.strength if body.strength is not None else float(_env("COMFYUI_HDR_DEFAULT_STRENGTH", "0.35"))
+    steps = _hdr_quality_steps(body.quality_mode)
+    cfg = float(_env("COMFYUI_HDR_CFG", _env("COMFYUI_CFG", "3.0")))
+    lora_name = _env("COMFYUI_KLEIN_LORA", "")
+    base_model = _env("COMFYUI_BASE_MODEL", "")
+    clip_name1 = _env("COMFYUI_CLIP_NAME1", "")
+    clip_name2 = _env("COMFYUI_CLIP_NAME2", clip_name1)
+    vae_name = _env("COMFYUI_VAE_NAME", "")
+
+    replacements: dict[str, Any] = {
+        "__INPUT_IMAGE_NAME__": input_image_path,
+        "__PROMPT__": request_prompt,
+        "__NEGATIVE_PROMPT__": request_neg,
+        "__SEED__": seed,
+        "__STRENGTH__": strength,
+        "__WIDTH__": body.width,
+        "__HEIGHT__": body.height,
+        "__STEPS__": steps,
+        "__CFG__": cfg,
+        "__LORA_NAME__": lora_name,
+        "__BASE_MODEL__": base_model,
+        "__CLIP_NAME1__": clip_name1,
+        "__CLIP_NAME2__": clip_name2,
+        "__VAE_NAME__": vae_name,
+    }
+    workflow = _deep_replace(copy.deepcopy(workflow), replacements)
+
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type", ""))
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        if class_type == "CLIPTextEncode":
+            title = str(node.get("_meta", {}).get("title", "")).lower()
+            inputs["text"] = request_neg if "negative" in title else request_prompt
+        elif class_type == "CLIPTextEncodeFlux":
+            title = str(node.get("_meta", {}).get("title", "")).lower()
+            text_value = request_neg if "negative" in title else request_prompt
+            inputs["clip_l"] = text_value
+            inputs["t5xxl"] = text_value
+            inputs["guidance"] = cfg
+        elif class_type == "KSampler":
+            inputs["seed"] = seed
+            inputs["steps"] = steps
+            inputs["cfg"] = cfg
+            inputs["denoise"] = strength
+        elif class_type == "LoraLoaderModelOnly":
+            if lora_name:
+                inputs["lora_name"] = lora_name
+            inputs["strength_model"] = 1.0
+        elif class_type == "UNETLoader":
+            if base_model:
+                inputs["unet_name"] = base_model
+        elif class_type == "CLIPLoader":
+            if clip_name1:
+                inputs["clip_name"] = clip_name1
+        elif class_type == "DualCLIPLoader":
+            if clip_name1:
+                inputs["clip_name1"] = clip_name1
+            if clip_name2:
+                inputs["clip_name2"] = clip_name2
+            inputs["type"] = "flux"
+        elif class_type == "VAELoader":
+            if vae_name:
+                inputs["vae_name"] = vae_name
+        elif class_type == "ModelSamplingFlux":
+            inputs["width"] = body.width
+            inputs["height"] = body.height
+
+    preferred_output_node_ids = _preferred_save_nodes(workflow, "COMFYUI_HDR_OUTPUT_NODE_IDS")
+    raw = _submit_and_wait_for_output(
+        base_url=base_url,
+        workflow=workflow,
+        preferred_output_node_ids=preferred_output_node_ids,
+    )
+    out = Image.open(io.BytesIO(raw)).convert("RGB")
+    return out.resize((body.width, body.height), resample=Image.LANCZOS)
 
 
 @app.get("/health")
@@ -528,6 +662,10 @@ def health():
         "mode": "comfyui_local",
         "comfyui_server_url": _env("COMFYUI_SERVER_URL", "http://127.0.0.1:8188"),
         "workflow_template": _env("COMFYUI_WORKFLOW_TEMPLATE", "examples/comfyui_flux2_klein_template.json"),
+        "hdr_workflow_template": _env(
+            "COMFYUI_HDR_WORKFLOW_TEMPLATE",
+            "examples/comfyui_flux2_klein_4b_hdr_restore_api.json",
+        ),
     }
 
 
