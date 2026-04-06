@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import hmac
+import io
+import json
 import os
 import threading
 import time
@@ -39,12 +41,12 @@ from pydantic import BaseModel, Field
 from PIL import Image
 
 from accounting import refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
-from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr, reconstruct_itm_hdr
+from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr
 from auth import auth_header_value, authenticate_account, bootstrap_dev_credentials, require_api_key_enabled
 from job_store import JobStore
-from panorama import get_mode
+from panorama import get_mode, hdr_http_json
 from remote_provider import RemoteProvider
-from rgbe_hdr import write_rgbe_hdr
+from rgbe_hdr import read_rgbe_hdr_bytes, write_rgbe_hdr
 
 APP_NAME = "HDRI API Server (MVP)"
 
@@ -115,9 +117,9 @@ class HdriRequest(BaseModel):
         description="Optional ERP control canvas height; must be 1/2 erp_canvas_width.",
     )
 
-    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "ai_itm", "off"] | None = Field(
+    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "comfyui_hdr", "off"] | None = Field(
         None,
-        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, ai_itm=emitter-aware inverse tone mapping, off=flat linear export.",
+        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, comfyui_hdr=worker-driven HDR restore, off=flat linear export.",
     )
     heuristic_hdr_lift: bool | None = Field(
         None,
@@ -358,6 +360,44 @@ def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
     return overrides
 
 
+def _build_hdr_restore_overrides(req: HdriRequest) -> dict[str, Any]:
+    overrides: dict[str, Any] = {
+        "hdr_exposure_bias": float(req.hdr_exposure_bias),
+    }
+    if req.panorama_prompt is not None:
+        overrides["prompt"] = req.panorama_prompt
+    if req.panorama_negative_prompt is not None:
+        overrides["negative_prompt"] = req.panorama_negative_prompt
+    if req.panorama_seed is not None:
+        overrides["seed"] = req.panorama_seed
+    if req.panorama_strength is not None:
+        overrides["strength"] = req.panorama_strength
+    return overrides
+
+
+def _run_comfyui_hdr_restore(req: HdriRequest, pano_rgb: np.ndarray) -> np.ndarray:
+    pano_u8 = np.clip(pano_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(pano_u8, mode="RGB").save(buf, format="PNG")
+    data = hdr_http_json(
+        image_b64=base64.b64encode(buf.getvalue()).decode("ascii"),
+        width=req.output_width,
+        height=req.output_height,
+        quality_mode=req.quality_mode,
+        request_overrides=_build_hdr_restore_overrides(req),
+    )
+
+    if "hdr_b64" in data:
+        raw = base64.b64decode(str(data["hdr_b64"]))
+        return read_rgbe_hdr_bytes(raw)
+
+    restored_rgb = np.asarray(data).astype(np.float32) / 255.0
+    restored_lin = _srgb_to_linear(restored_rgb)
+    if abs(req.hdr_exposure_bias) > 1e-6:
+        restored_lin = restored_lin * (2.0 ** float(req.hdr_exposure_bias))
+    return np.clip(restored_lin, 0.0, None).astype(np.float32)
+
+
 def _generate_hdri(
     req: HdriRequest,
     *,
@@ -391,22 +431,26 @@ def _generate_hdri(
     rgb_lin = _apply_preset(rgb_lin, req.preset)
     rgb_lin = _apply_baked_adjustments(rgb_lin, req)
     hdr_mode = _resolve_hdr_mode(req)
-    if hdr_mode in {"ai_fast", "ai_itm"}:
+    if hdr_mode == "comfyui_hdr":
         try:
-            if hdr_mode == "ai_itm":
-                rgb_hdr = reconstruct_itm_hdr(
-                    rgb_lin,
-                    quality_mode=req.quality_mode,
-                    exposure_bias=req.hdr_exposure_bias,
-                    model_name=req.hdr_model_name,
-                )
+            rgb_hdr = _run_comfyui_hdr_restore(req, rgb)
+        except Exception as e:
+            failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
+            print(f"ComfyUI HDR restore failed ({e}); failover={failover}")
+            if failover == "off":
+                rgb_hdr = np.clip(rgb_lin.astype(np.float32) * 2.5, 0.0, None)
+                hdr_mode = "off"
             else:
-                rgb_hdr = reconstruct_ai_hdr(
-                    rgb_lin,
-                    quality_mode=req.quality_mode,
-                    exposure_bias=req.hdr_exposure_bias,
-                    model_name=req.hdr_model_name,
-                )
+                rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
+                hdr_mode = "heuristic"
+    elif hdr_mode == "ai_fast":
+        try:
+            rgb_hdr = reconstruct_ai_hdr(
+                rgb_lin,
+                quality_mode=req.quality_mode,
+                exposure_bias=req.hdr_exposure_bias,
+                model_name=req.hdr_model_name,
+            )
         except Exception as e:
             failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
             print(f"AI HDR failed ({e}); failover={failover}")
@@ -441,13 +485,13 @@ def _generate_hdri(
     )
 
 
-def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "ai_itm", "off"]:
+def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "comfyui_hdr", "off"]:
     if req.hdr_reconstruction_mode is not None:
         return req.hdr_reconstruction_mode
     if req.heuristic_hdr_lift is not None:
         return "heuristic" if req.heuristic_hdr_lift else "off"
     default_mode = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if default_mode not in {"heuristic", "ai_fast", "ai_itm", "off"}:
+    if default_mode not in {"heuristic", "ai_fast", "comfyui_hdr", "off"}:
         return "ai_fast"
     return default_mode  # type: ignore[return-value]
 
@@ -456,13 +500,13 @@ def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "ai_i
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
     hdr_default = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if hdr_default not in {"heuristic", "ai_fast", "ai_itm", "off"}:
+    if hdr_default not in {"heuristic", "ai_fast", "comfyui_hdr", "off"}:
         hdr_default = "ai_fast"
     return {
         "panorama_mode": get_mode(),
         "hdr_reconstruction_default": hdr_default,
         "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
-        "ai_hdr_itm_model_name": os.environ.get("AI_HDR_ITM_MODEL_NAME", "embedded"),
+        "hdr_http_url": os.environ.get("HDR_HTTP_URL", ""),
         "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
     }
 

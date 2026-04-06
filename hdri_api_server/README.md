@@ -193,14 +193,14 @@ The API applies HDR reconstruction after panorama generation and before `.hdr` e
 
 Request field:
 
-- `hdr_reconstruction_mode`: `ai_fast` | `ai_itm` | `heuristic` | `off`
+- `hdr_reconstruction_mode`: `ai_fast` | `comfyui_hdr` | `heuristic` | `off`
 - `hdr_exposure_bias`: EV offset applied after HDR reconstruction
 
 Mode behavior:
 
-- `ai_fast` (recommended default): lightweight AI HDR reconstruction (`ai_hdr.py`)
-- `ai_itm`: emitter-aware inverse tone mapping that pushes more range into clipped lights and bright windows/suns
-- `heuristic`: legacy `_fake_hdr_lift()` path
+- `ai_fast` (recommended fallback/default): lightweight in-process AI HDR reconstruction (`ai_hdr.py`)
+- `comfyui_hdr`: call a second ComfyUI workflow to restore HDR-like highlight range after panorama generation
+- `heuristic`: conservative local lift path
 - `off`: flat linear export (`rgb_lin * 2.5`)
 
 Server defaults / failover env:
@@ -209,42 +209,11 @@ Server defaults / failover env:
 - `AI_HDR_FAILOVER_MODE=heuristic`
 - `AI_HDR_MODEL_NAME=embedded|torchscript`
 - `AI_HDR_MODEL_PATH=...` (required when using `torchscript`)
-- `AI_HDR_ITM_MODEL_NAME=embedded|torchscript`
-- `AI_HDR_ITM_MODEL_PATH=...` (optional; falls back to `AI_HDR_MODEL_PATH`)
-
-## Training a real `ai_itm` model
-
-The repo now includes a first training/export path under `training/`.
-
-Install training deps:
-
-```powershell
-cd hdri_api_server
-python3 -m pip install --user -r requirements-train.txt
-```
-
-Train on a folder of true HDR panoramas (`.hdr`, `.npy`, or `.npz`):
-
-```powershell
-cd hdri_api_server
-python3 -m training.train_itm --dataset-root D:\hdr_panos --output-dir training_runs\itm_v1
-```
-
-Export the best checkpoint to TorchScript:
-
-```powershell
-cd hdri_api_server
-python3 -m training.export_itm_torchscript --checkpoint training_runs\itm_v1\best.pt --output training_runs\itm_v1\itm_model.ts
-```
-
-Use the trained model in the API:
-
-```powershell
-$env:AI_HDR_ITM_MODEL_NAME="torchscript"
-$env:AI_HDR_ITM_MODEL_PATH="D:\path\to\itm_model.ts"
-```
-
-See `training/README.md` for details.
+- `HDR_HTTP_URL=...` (used when `hdr_reconstruction_mode=comfyui_hdr`; typically `http://127.0.0.1:8001/v1/hdr_restore`)
+- optional `HDR_HTTP_API_KEY`
+- optional `HDR_HTTP_HEADERS_JSON`
+- optional `HDR_HTTP_BODY_JSON`
+- optional `HDR_HTTP_TIMEOUT_S`
 
 ## ComfyUI configuration for the worker
 
@@ -261,6 +230,13 @@ Environment variables used by `examples/comfyui_worker.py`:
 - `COMFYUI_DEFAULT_NEGATIVE_PROMPT`
 - `COMFYUI_POLL_TIMEOUT_S`
 - `COMFYUI_POLL_INTERVAL_S`
+- `COMFYUI_HDR_WORKFLOW_TEMPLATE` (optional dedicated ComfyUI API JSON for HDR restore stage)
+- `COMFYUI_HDR_DEFAULT_PROMPT`
+- `COMFYUI_HDR_DEFAULT_NEGATIVE_PROMPT`
+- `COMFYUI_HDR_FAST_STEPS` / `COMFYUI_HDR_BALANCED_STEPS` / `COMFYUI_HDR_HIGH_STEPS`
+- `COMFYUI_HDR_CFG`
+- `COMFYUI_HDR_DEFAULT_STRENGTH`
+- `COMFYUI_HDR_OUTPUT_NODE_IDS` (optional comma-separated preferred save/output node ids)
 
 The included workflow template is a starter baseline.  
 You will usually adapt node IDs/inputs to your actual ComfyUI graph.

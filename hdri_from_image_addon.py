@@ -797,7 +797,7 @@ class HDRI_API_Settings(PropertyGroup):
         name="HDR Reconstruction",
         items=[
             ("ai_fast", "AI Fast", "Use server-side AI HDR reconstruction (recommended)"),
-            ("ai_itm", "AI ITM", "Use emitter-aware inverse tone mapping to recover stronger HDR highlights"),
+            ("comfyui_hdr", "ComfyUI HDR", "Run HDR restoration inside the ComfyUI worker workflow"),
             ("heuristic", "Heuristic", "Legacy heuristic HDR lift"),
             ("off", "Off", "Flat linear export (least boosted)"),
         ],

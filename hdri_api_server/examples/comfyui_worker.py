@@ -68,6 +68,32 @@ class PanoramaRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class HDRRestoreRequest(BaseModel):
+    image_b64: str
+    width: int = 2048
+    height: int = 1024
+    quality_mode: str = "balanced"
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    seed: int | None = None
+    strength: float | None = Field(None, ge=0.0, le=1.0)
+
+    model_config = {"extra": "allow"}
+
+
+class HDRRestoreRequest(BaseModel):
+    image_b64: str
+    width: int = 2048
+    height: int = 1024
+    quality_mode: str = "balanced"
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    strength: float | None = Field(None, ge=0.0, le=1.0)
+    seed: int | None = None
+
+    model_config = {"extra": "allow"}
+
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -82,6 +108,12 @@ def _decode_image_b64(s: str) -> bytes:
 def _encode_png_b64(im: Image.Image) -> str:
     buf = io.BytesIO()
     im.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _encode_lossless_image_b64(im: Image.Image, fmt: str) -> str:
+    buf = io.BytesIO()
+    im.save(buf, format=fmt)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -545,6 +577,31 @@ def panorama(body: PanoramaRequest) -> dict[str, Any]:
             "bbox_xywh": list(layout.bbox_xywh),
             "seam_fix_applied": bool(use_seam_fix),
             "worker": "comfyui_local_v1",
+            "width": out.width,
+            "height": out.height,
+        },
+    }
+
+
+@app.post("/v1/hdr_restore")
+def hdr_restore(body: HDRRestoreRequest) -> dict[str, Any]:
+    if body.width != 2 * body.height:
+        raise HTTPException(status_code=400, detail="HDR restore worker expects 2:1 equirectangular target.")
+
+    try:
+        src = Image.open(io.BytesIO(_decode_image_b64(body.image_b64))).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid image_b64: {e}") from e
+
+    try:
+        out = run_comfyui_hdr_restore(body, src.resize((body.width, body.height), resample=Image.LANCZOS))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ComfyUI HDR restore failed: {e}") from e
+
+    return {
+        "image_b64": _encode_lossless_image_b64(out, "PNG"),
+        "meta": {
+            "worker": "comfyui_hdr_restore_v1",
             "width": out.width,
             "height": out.height,
         },
