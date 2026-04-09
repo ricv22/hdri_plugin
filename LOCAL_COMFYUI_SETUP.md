@@ -25,9 +25,10 @@ In `hdri_api_server/.env`:
 ```env
 PANORAMA_MODE=http_json
 PANORAMA_HTTP_URL=http://127.0.0.1:8001/v1/panorama
-HDR_RECONSTRUCTION_MODE_DEFAULT=ai_fast
+HDR_RECONSTRUCTION_MODE_DEFAULT=comfyui_hdr
 AI_HDR_FAILOVER_MODE=heuristic
 AI_HDR_MODEL_NAME=embedded
+HDR_HTTP_URL=http://127.0.0.1:8001/v1/hdr_restore
 HDRI_PUBLIC_BASE_URL=http://127.0.0.1:8000
 HDRI_SIGNING_SECRET=change-me
 ```
@@ -49,11 +50,14 @@ Worker env options (set in shell or `.env` for your worker process):
 ```env
 COMFYUI_SERVER_URL=http://127.0.0.1:8188
 COMFYUI_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_template.json
+COMFYUI_HDR_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_4b_hdr_restore_api.json
 # Optional overrides (prefer workflow defaults if using exported API JSON)
 # COMFYUI_BASE_MODEL=flux-2-klein-base-4b.safetensors
 # COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors
 COMFYUI_BALANCED_STEPS=28
 COMFYUI_DEFAULT_STRENGTH=1.0
+COMFYUI_HDR_BALANCED_STEPS=28
+COMFYUI_HDR_DEFAULT_STRENGTH=0.35
 ```
 
 Run:
@@ -73,7 +77,7 @@ Addon preferences:
 
 - API base URL: `http://127.0.0.1:8000`
 - Timeout: start with `180` or `300`
-- HDR reconstruction: `AI Fast` (recommended)
+- HDR reconstruction: `ComfyUI HDR` (recommended) or `AI Fast` as fallback
 
 Panel defaults for V1:
 
