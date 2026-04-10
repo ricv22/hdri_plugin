@@ -186,18 +186,19 @@ class JobStore:
             )
             conn.commit()
 
-    def set_job_succeeded(self, job_id: str, result_payload: dict[str, Any]) -> None:
+    def set_job_succeeded(self, job_id: str, result_payload: dict[str, Any]) -> bool:
         now = int(time.time())
         with self._lock, self._connect() as conn:
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE jobs
                 SET status = 'succeeded', result_json = ?, error = NULL, updated_at = ?
-                WHERE job_id = ?
+                WHERE job_id = ? AND status = 'running'
                 """,
                 (json.dumps(result_payload), now, job_id),
             )
             conn.commit()
+            return cur.rowcount > 0
 
     def set_job_failed(self, job_id: str, error_message: str) -> None:
         now = int(time.time())
@@ -212,10 +213,58 @@ class JobStore:
             )
             conn.commit()
 
+    def set_job_failed_if_active(self, job_id: str, error_message: str) -> bool:
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed', error = ?, updated_at = ?
+                WHERE job_id = ? AND status IN ('queued', 'running')
+                """,
+                (error_message, now, job_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def mark_job_refunded(self, job_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("UPDATE jobs SET refunded = 1 WHERE job_id = ?", (job_id,))
             conn.commit()
+
+    def try_mark_job_refunded(self, job_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE jobs SET refunded = 1 WHERE job_id = ? AND refunded = 0",
+                (job_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def count_active_jobs(self, account_id: str) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM jobs
+                WHERE account_id = ? AND status IN ('queued', 'running')
+                """,
+                (account_id,),
+            ).fetchone()
+        return int(row["n"] if row else 0)
+
+    def stale_running_job_ids(self, *, stale_after_seconds: int) -> list[str]:
+        cutoff = int(time.time()) - int(stale_after_seconds)
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT job_id
+                FROM jobs
+                WHERE status = 'running' AND updated_at <= ?
+                """,
+                (cutoff,),
+            ).fetchall()
+        return [str(r["job_id"]) for r in rows]
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as conn:

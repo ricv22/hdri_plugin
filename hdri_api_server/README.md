@@ -98,6 +98,10 @@ Creates an async generation job and returns:
 
 Poll until `status` is `succeeded` or `failed`.
 
+### `POST /v1/jobs/{job_id}/cancel`
+
+Marks active jobs (`queued`/`running`) as failed with `error="cancelled by user"` and refunds reserved tokens.
+
 ### `GET /v1/account`
 
 Returns authenticated account usage:
@@ -109,6 +113,10 @@ Returns authenticated account usage:
   "api_key_required": true
 }
 ```
+
+### `POST /v1/accounts` (admin)
+
+Creates a real account and returns a new API key (shown once). Requires `X-Admin-Token` header matching `HDRI_ADMIN_TOKEN`.
 
 ### `GET /v1/files/{id}.hdr?exp=...&sig=...`
 
@@ -125,6 +133,9 @@ Shows active panorama backend (`panorama_mode`).
 - Async jobs reserve tokens at creation (`fast=1`, `balanced=1`, `high=2`).
 - Failed jobs are refunded automatically.
 - For local testing, set `HDRI_BOOTSTRAP_API_KEY` to auto-create a dev account/key.
+- In production, provision accounts via `POST /v1/accounts` and keep `HDRI_ADMIN_TOKEN` secret.
+- `HDRI_MAX_ACTIVE_JOBS_PER_ACCOUNT` limits concurrent `queued/running` jobs per account (default `2`).
+- Stuck jobs are auto-failed and auto-refunded by stale-job reaper (`HDRI_STALE_JOB_TIMEOUT_S`, `HDRI_STALE_REAPER_INTERVAL_S`).
 
 ## Remote provider adapter
 
@@ -140,6 +151,8 @@ RunComfy env (when using `runcomfy`):
 - optional `RUNCOMFY_BASE_URL` (default `https://api.runcomfy.net`)
 - optional `RUNCOMFY_WORKFLOW_JSON_PATH` to send full `workflow_api_json`
 - optional `RUNCOMFY_POLL_TIMEOUT_S`
+- optional `RUNCOMFY_OVERRIDES_JSON` for static baseline node overrides
+- optional `RUNCOMFY_*_NODE_IDS` mappings to inject image/prompt/seed/strength/reference_coverage/width/height/steps
 
 ## Local ComfyUI worker (recommended for V1)
 

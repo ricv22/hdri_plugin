@@ -27,3 +27,17 @@ def refund_tokens(store: JobStore, account_id: str, job_id: str, amount: int) ->
         return
     if store.adjust_tokens_if_possible(account_id, amount):
         store.record_usage_event(job_id, account_id, amount, "refund")
+
+
+def refund_job_if_needed(store: JobStore, account_id: str | None, job_id: str) -> bool:
+    if not account_id:
+        return False
+    row = store.get_job(job_id)
+    if not row:
+        return False
+    if int(row.get("cost_tokens") or 0) <= 0:
+        return False
+    if not store.try_mark_job_refunded(job_id):
+        return False
+    refund_tokens(store, account_id, job_id, int(row["cost_tokens"]))
+    return True

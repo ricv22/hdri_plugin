@@ -35,14 +35,21 @@ def _load_local_env() -> None:
 _load_local_env()
 
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
-from accounting import refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
+from accounting import refund_job_if_needed, refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
 from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr
-from auth import auth_header_value, authenticate_account, bootstrap_dev_credentials, require_api_key_enabled
+from auth import (
+    auth_header_value,
+    authenticate_account,
+    bootstrap_dev_credentials,
+    generate_api_key,
+    hash_api_key,
+    require_api_key_enabled,
+)
 from job_store import JobStore
 from panorama import get_mode, hdr_http_json
 from remote_provider import RemoteProvider
@@ -179,6 +186,17 @@ class AccountResponse(BaseModel):
     account_id: str
     tokens_remaining: int
     api_key_required: bool
+
+
+class AccountCreateRequest(BaseModel):
+    account_id: str | None = Field(None, min_length=3, max_length=128)
+    initial_tokens: int = Field(0, ge=0)
+
+
+class AccountCreateResponse(BaseModel):
+    account_id: str
+    api_key: str
+    tokens_remaining: int
 
 
 def _b64_to_bytes(s: str) -> bytes:
@@ -333,6 +351,26 @@ app = FastAPI(title=APP_NAME)
 _store = JobStore(DB_PATH)
 bootstrap_dev_credentials(_store)
 _provider = RemoteProvider()
+_REAPER_STOP = threading.Event()
+
+
+def _max_active_jobs_per_account() -> int:
+    try:
+        return max(0, int(os.environ.get("HDRI_MAX_ACTIVE_JOBS_PER_ACCOUNT", "2")))
+    except Exception:
+        return 2
+
+
+def _admin_token() -> str:
+    return os.environ.get("HDRI_ADMIN_TOKEN", "").strip()
+
+
+def _require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
+    expected = _admin_token()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin account management is disabled.")
+    if not x_admin_token or not hmac.compare_digest(expected, x_admin_token):
+        raise HTTPException(status_code=403, detail="Invalid admin token.")
 
 
 def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
@@ -496,6 +534,28 @@ def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "comf
     return default_mode  # type: ignore[return-value]
 
 
+def _start_stale_job_reaper() -> None:
+    interval_s = max(5, int(os.environ.get("HDRI_STALE_REAPER_INTERVAL_S", "30")))
+    stale_after_s = max(60, int(os.environ.get("HDRI_STALE_JOB_TIMEOUT_S", "900")))
+
+    def _loop() -> None:
+        while not _REAPER_STOP.wait(interval_s):
+            for job_id in _store.stale_running_job_ids(stale_after_seconds=stale_after_s):
+                row = _store.get_job(job_id)
+                if not row:
+                    continue
+                changed = _store.set_job_failed_if_active(job_id, "stale job timeout")
+                if not changed:
+                    continue
+                refund_job_if_needed(_store, row.get("account_id"), job_id)
+
+    t = threading.Thread(target=_loop, name="hdri-stale-job-reaper", daemon=True)
+    t.start()
+
+
+_start_stale_job_reaper()
+
+
 @app.get("/v1/config")
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
@@ -529,28 +589,27 @@ def create_hdri(req: HdriRequest, authorization: str | None = Depends(auth_heade
 
 def _run_job(job_id: str, req: HdriRequest, account_id: str | None) -> None:
     panorama_overrides = _build_panorama_overrides(req)
-    provider_submit = _provider.submit_job(
-        image_b64=req.image_b64,
-        width=req.output_width,
-        height=req.output_height,
-        scene_mode=req.scene_mode,
-        quality_mode=req.quality_mode,
-        overrides=panorama_overrides or None,
-    )
-    _store.set_job_running(job_id, provider_job_id=provider_submit.provider_job_id)
     try:
+        provider_submit = _provider.submit_job(
+            image_b64=req.image_b64,
+            width=req.output_width,
+            height=req.output_height,
+            scene_mode=req.scene_mode,
+            quality_mode=req.quality_mode,
+            overrides=panorama_overrides or None,
+        )
+        _store.set_job_running(job_id, provider_job_id=provider_submit.provider_job_id)
         result = _generate_hdri(
             req,
             provider_job_id=provider_submit.provider_job_id,
             panorama_overrides=panorama_overrides,
         )
-        _store.set_job_succeeded(job_id, result.model_dump())
+        if not _store.set_job_succeeded(job_id, result.model_dump()):
+            # Job was likely cancelled while provider work was still in flight.
+            refund_job_if_needed(_store, account_id, job_id)
     except Exception as e:
-        _store.set_job_failed(job_id, str(e))
-        row = _store.get_job(job_id)
-        if row and account_id and not row["refunded"] and row["cost_tokens"] > 0:
-            refund_tokens(_store, account_id, job_id, row["cost_tokens"])
-            _store.mark_job_refunded(job_id)
+        _store.set_job_failed_if_active(job_id, str(e))
+        refund_job_if_needed(_store, account_id, job_id)
 
 
 @app.post("/v1/jobs/hdri", response_model=HdriJobCreateResponse)
@@ -561,12 +620,42 @@ def create_hdri_job(req: HdriRequest, authorization: str | None = Depends(auth_h
     account_id: str | None = None
     if not account["is_anonymous"]:
         account_id = account["account_id"]
+        max_active = _max_active_jobs_per_account()
+        if max_active > 0 and _store.count_active_jobs(account_id) >= max_active:
+            raise HTTPException(status_code=429, detail="Too many active jobs for this account.")
         cost = token_cost_for_quality(req.quality_mode)
         reserve_tokens_or_raise(_store, account_id, job_id, cost)
     _store.create_job(job_id, req.model_dump(), account_id=account_id, cost_tokens=cost)
     t = threading.Thread(target=_run_job, args=(job_id, req, account_id), daemon=True)
     t.start()
     return HdriJobCreateResponse(job_id=job_id, status="queued")
+
+
+@app.post("/v1/jobs/{job_id}/cancel", response_model=HdriJobStatusResponse)
+def cancel_hdri_job(job_id: str, authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=require_api_key_enabled())
+    row = _store.get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if row["account_id"] and row["account_id"] != account["account_id"]:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    _store.set_job_failed_if_active(job_id, "cancelled by user")
+    refund_job_if_needed(_store, row.get("account_id"), job_id)
+    updated = _store.get_job(job_id) or row
+    if updated["status"] == "succeeded" and updated["result"]:
+        return HdriJobStatusResponse(
+            job_id=job_id,
+            status="succeeded",
+            provider_job_id=updated.get("provider_job_id"),
+            **updated["result"],
+        )
+    return HdriJobStatusResponse(
+        job_id=job_id,
+        status=updated["status"],
+        provider_job_id=updated.get("provider_job_id"),
+        error=updated.get("error"),
+    )
 
 
 @app.get("/v1/jobs/{job_id}", response_model=HdriJobStatusResponse)
@@ -602,6 +691,27 @@ def get_account(authorization: str | None = Depends(auth_header_value)):
         account_id=row["account_id"],
         tokens_remaining=row["tokens_remaining"],
         api_key_required=require_api_key_enabled(),
+    )
+
+
+@app.post("/v1/accounts", response_model=AccountCreateResponse, dependencies=[Depends(_require_admin_token)])
+def create_account(req: AccountCreateRequest):
+    account_id = (req.account_id or f"acct-{uuid.uuid4().hex[:10]}").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id cannot be empty.")
+    existing = _store.get_account(account_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="Account already exists.")
+    _store.ensure_account(account_id, initial_tokens=int(req.initial_tokens))
+    raw_key = generate_api_key()
+    _store.ensure_api_key(hash_api_key(raw_key), account_id)
+    row = _store.get_account(account_id)
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create account.")
+    return AccountCreateResponse(
+        account_id=account_id,
+        api_key=raw_key,
+        tokens_remaining=int(row["tokens_remaining"]),
     )
 
 

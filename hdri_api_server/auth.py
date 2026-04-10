@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 
 from fastapi import Header, HTTPException
 
@@ -56,3 +57,7 @@ def authenticate_account(
 
 def auth_header_value(authorization: str | None = Header(default=None)) -> str | None:
     return authorization
+
+
+def generate_api_key() -> str:
+    return f"hdri_{secrets.token_urlsafe(24)}"

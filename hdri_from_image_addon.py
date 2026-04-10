@@ -886,7 +886,13 @@ class HDRI_OT_refresh_server_config(Operator):
 class HDRI_OT_apply_from_api(Operator):
     bl_idname = "hdri.apply_from_api"
     bl_label = "Generate & Apply HDRI"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
+
+    _timer = None
+    _job_id = ""
+    _base_url = ""
+    _headers = {}
+    _deadline = 0.0
 
     @staticmethod
     def _resolution_pair(value: str) -> tuple[int, int]:
@@ -895,6 +901,141 @@ class HDRI_OT_apply_from_api(Operator):
             return int(w_s), int(h_s)
         except Exception:
             return 2048, 1024
+
+    def _clear_modal_timer(self, context):
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
+            self._timer = None
+
+    def _refresh_tokens(self, settings):
+        acct = _safe_get_account(self._base_url, self._headers, timeout_s=10)
+        if acct and "tokens_remaining" in acct:
+            try:
+                settings.tokens_remaining = int(acct["tokens_remaining"])
+            except Exception:
+                pass
+
+    def _cancel_remote_job(self):
+        if not self._job_id:
+            return
+        try:
+            _http_post_json(
+                f"{self._base_url}/v1/jobs/{self._job_id}/cancel",
+                {},
+                headers=self._headers,
+                timeout_s=8,
+            )
+        except Exception:
+            pass
+
+    def _apply_hdri_response(self, context, settings, prefs, resp: dict) -> tuple[bool, str]:
+        # Safety net: block accidental resize responses from misconfigured servers.
+        if str(resp.get("panorama_mode", "")).strip().lower() == "resize":
+            settings.last_panorama_mode = "resize"
+            return (
+                False,
+                "API returned panorama_mode=resize (stretched source image). Fix server mode to http_json and retry.",
+            )
+
+        # Prefer signed URL: hdri_url (Radiance .hdr) or exr_url (same URL or .exr)
+        download_url = resp.get("hdri_url") or resp.get("exr_url")
+        file_bytes = None
+        if download_url:
+            try:
+                file_bytes = _download_bytes(download_url, headers=self._headers, timeout_s=int(prefs.timeout_s))
+            except Exception as e:
+                return False, f"Failed to download HDRI: {e}"
+        elif resp.get("exr_base64"):
+            try:
+                file_bytes = base64.b64decode(resp["exr_base64"])
+            except Exception as e:
+                return False, f"Bad exr_base64: {e}"
+        else:
+            return False, "API response missing hdri_url, exr_url, or exr_base64."
+
+        suffix = ".hdr"
+        if download_url:
+            path_part = download_url.split("?", 1)[0].lower()
+            if path_part.endswith(".exr"):
+                suffix = ".exr"
+            elif path_part.endswith(".hdr"):
+                suffix = ".hdr"
+        elif resp.get("exr_base64"):
+            suffix = ".exr"
+
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
+            os.close(fd)
+            with open(tmp_path, "wb") as f:
+                f.write(file_bytes)
+        except Exception as e:
+            return False, f"Failed to write temp HDRI file: {e}"
+
+        try:
+            _ensure_cycles()
+            world = context.scene.world
+            if world is None:
+                world = bpy.data.worlds.new("World")
+                context.scene.world = world
+
+            nodes = _ensure_world_nodes(world)
+            env_node = nodes["env"]
+            env_blur_node = nodes["env_blur"]
+            mix_node = nodes["mix"]
+            tint_mix_node = nodes["tint_mix"]
+            hue_sat_node = nodes["hue_sat"]
+            bg_node = nodes["bg"]
+            mapping_node = nodes["mapping"]
+
+            img = bpy.data.images.load(tmp_path, check_existing=True)
+            _set_env_image_colorspace(img)
+            env_node.image = img
+            env_blur_node.image = img
+
+            _apply_look_controls_to_nodes(
+                settings,
+                mapping_node,
+                mix_node,
+                tint_mix_node,
+                hue_sat_node,
+                bg_node,
+            )
+
+            if settings.add_preview_sphere:
+                _ensure_preview_sphere()
+
+            if settings.fake_ground:
+                _apply_fake_ground(
+                    context,
+                    settings,
+                    img,
+                    mapping_node,
+                    mix_node,
+                    tint_mix_node,
+                    hue_sat_node,
+                    bg_node,
+                )
+            else:
+                _set_fake_ground_visible(False)
+        except Exception as e:
+            return False, f"Failed to apply HDRI: {e}"
+
+        mode = str(resp.get("panorama_mode", "")).strip()
+        if mode:
+            settings.last_panorama_mode = mode
+        settings.current_job_status = "succeeded"
+        self._refresh_tokens(settings)
+        if mode:
+            if mode == "resize":
+                return (
+                    True,
+                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json).",
+                )
+            return True, f"HDRI applied (panorama_mode={mode})."
+        return True, "HDRI applied to World."
 
     def execute(self, context):
         prefs = _addon_prefs()
@@ -1000,177 +1141,124 @@ class HDRI_OT_apply_from_api(Operator):
         if not job_id:
             self.report({"ERROR"}, "API response missing job_id.")
             return {"CANCELLED"}
+
         s.current_job_id = job_id
         s.current_job_status = "queued"
         s.last_job_error = ""
+        self._job_id = job_id
+        self._base_url = base
+        self._headers = headers
+        self._deadline = time.monotonic() + float(prefs.timeout_s)
+        self._timer = context.window_manager.event_timer_add(2.0, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
 
-        poll_url = f"{base}/v1/jobs/{job_id}"
-        poll_interval_s = 2.0
-        deadline = time.time() + float(prefs.timeout_s)
-        resp = None
-        while time.time() < deadline:
-            try:
-                status_resp = _http_get_json(poll_url, headers=headers, timeout_s=min(20, int(prefs.timeout_s)))
-            except Exception as e:
-                self.report({"ERROR"}, f"Polling failed: {e}")
-                return {"CANCELLED"}
-            if not isinstance(status_resp, dict):
-                self.report({"ERROR"}, "Invalid job status response.")
-                return {"CANCELLED"}
-            status = str(status_resp.get("status", "")).strip().lower()
-            if status:
-                s.current_job_status = status
-            if status in {"queued", "running"}:
-                time.sleep(poll_interval_s)
-                continue
-            if status == "failed":
-                err = str(status_resp.get("error", "Job failed without details."))
-                s.last_job_error = err
-                self.report({"ERROR"}, f"Job failed: {err[:300]}")
-                acct = _safe_get_account(base, headers, timeout_s=10)
-                if acct and "tokens_remaining" in acct:
-                    try:
-                        s.tokens_remaining = int(acct["tokens_remaining"])
-                    except Exception:
-                        pass
-                return {"CANCELLED"}
-            if status == "succeeded":
-                resp = status_resp
-                break
-            self.report({"ERROR"}, f"Unexpected job status: {status or '(missing)'}")
+    def modal(self, context, event):
+        s = context.scene.hdri_api_settings
+        if event.type == "ESC":
+            self._clear_modal_timer(context)
+            self._cancel_remote_job()
+            s.current_job_status = ""
+            s.current_job_id = ""
+            s.last_job_error = "cancelled by user"
+            self._refresh_tokens(s)
+            self.report({"INFO"}, "HDRI generation cancelled.")
             return {"CANCELLED"}
 
-        if resp is None:
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        if time.monotonic() >= self._deadline:
+            self._clear_modal_timer(context)
+            self._cancel_remote_job()
+            s.current_job_status = "failed"
+            s.last_job_error = "Job polling timed out."
+            self._refresh_tokens(s)
             self.report({"ERROR"}, "Job polling timed out.")
             return {"CANCELLED"}
 
-        # Safety net: block accidental resize responses from misconfigured servers.
-        if isinstance(resp, dict) and str(resp.get("panorama_mode", "")).strip().lower() == "resize":
-            s.last_panorama_mode = "resize"
-            self.report(
-                {"ERROR"},
-                "API returned panorama_mode=resize (stretched source image). Fix server mode to http_json and retry.",
-            )
-            return {"CANCELLED"}
-
-        # Prefer signed URL: hdri_url (Radiance .hdr) or exr_url (same URL or .exr)
-        download_url = None
-        if isinstance(resp, dict):
-            download_url = resp.get("hdri_url") or resp.get("exr_url")
-
-        file_bytes = None
-        if download_url:
-            try:
-                file_bytes = _download_bytes(download_url, headers=headers, timeout_s=int(prefs.timeout_s))
-            except Exception as e:
-                self.report({"ERROR"}, f"Failed to download HDRI: {e}")
-                return {"CANCELLED"}
-        elif isinstance(resp, dict) and resp.get("exr_base64"):
-            try:
-                file_bytes = base64.b64decode(resp["exr_base64"])
-            except Exception as e:
-                self.report({"ERROR"}, f"Bad exr_base64: {e}")
-                return {"CANCELLED"}
-        else:
-            self.report({"ERROR"}, "API response missing hdri_url, exr_url, or exr_base64.")
-            return {"CANCELLED"}
-
-        # Infer extension from URL path (Radiance .hdr vs OpenEXR .exr)
-        suffix = ".hdr"
-        if download_url:
-            path_part = download_url.split("?", 1)[0].lower()
-            if path_part.endswith(".exr"):
-                suffix = ".exr"
-            elif path_part.endswith(".hdr"):
-                suffix = ".hdr"
-        elif isinstance(resp, dict) and resp.get("exr_base64"):
-            suffix = ".exr"
-
-        # Blender needs a file path for Environment Texture. We'll write to a temp file.
-        # (Not “saving to library”; just a temp cache file for this session.)
         try:
-            fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
-            os.close(fd)
-            with open(tmp_path, "wb") as f:
-                f.write(file_bytes)
-        except Exception as e:
-            self.report({"ERROR"}, f"Failed to write temp HDRI file: {e}")
-            return {"CANCELLED"}
-
-        try:
-            _ensure_cycles()
-            world = context.scene.world
-            if world is None:
-                world = bpy.data.worlds.new("World")
-                context.scene.world = world
-
-            nodes = _ensure_world_nodes(world)
-            env_node = nodes["env"]
-            env_blur_node = nodes["env_blur"]
-            mix_node = nodes["mix"]
-            tint_mix_node = nodes["tint_mix"]
-            hue_sat_node = nodes["hue_sat"]
-            bg_node = nodes["bg"]
-            mapping_node = nodes["mapping"]
-
-            # Load image into Blender and assign to env texture
-            img = bpy.data.images.load(tmp_path, check_existing=True)
-            # Blender 4.x+ renamed "Linear" — use scene-linear / linear Rec.709 for HDRI lighting
-            _set_env_image_colorspace(img)
-            env_node.image = img
-            env_blur_node.image = img
-
-            # Apply rotation/look controls and keep fake ground in sync.
-            _apply_look_controls_to_nodes(
-                s,
-                mapping_node,
-                mix_node,
-                tint_mix_node,
-                hue_sat_node,
-                bg_node,
+            status_resp = _http_get_json(
+                f"{self._base_url}/v1/jobs/{self._job_id}",
+                headers=self._headers,
+                timeout_s=20,
             )
-
-            if s.add_preview_sphere:
-                _ensure_preview_sphere()
-
-            if s.fake_ground:
-                _apply_fake_ground(
-                    context,
-                    s,
-                    img,
-                    mapping_node,
-                    mix_node,
-                    tint_mix_node,
-                    hue_sat_node,
-                    bg_node,
-                )
-            else:
-                _set_fake_ground_visible(False)
-
         except Exception as e:
-            self.report({"ERROR"}, f"Failed to apply HDRI: {e}")
+            self._clear_modal_timer(context)
+            s.current_job_status = "failed"
+            s.last_job_error = f"Polling failed: {e}"
+            self.report({"ERROR"}, s.last_job_error[:300])
             return {"CANCELLED"}
 
-        mode = resp.get("panorama_mode", "") if isinstance(resp, dict) else ""
-        if mode:
-            s.last_panorama_mode = str(mode)
-        s.current_job_status = "succeeded"
+        if not isinstance(status_resp, dict):
+            self._clear_modal_timer(context)
+            s.current_job_status = "failed"
+            s.last_job_error = "Invalid job status response."
+            self.report({"ERROR"}, s.last_job_error)
+            return {"CANCELLED"}
+
+        status = str(status_resp.get("status", "")).strip().lower()
+        if status:
+            s.current_job_status = status
+        if status in {"queued", "running"}:
+            return {"RUNNING_MODAL"}
+
+        self._clear_modal_timer(context)
+        if status == "failed":
+            err = str(status_resp.get("error", "Job failed without details."))
+            s.last_job_error = err
+            self._refresh_tokens(s)
+            self.report({"ERROR"}, f"Job failed: {err[:300]}")
+            return {"CANCELLED"}
+        if status == "succeeded":
+            ok, message = self._apply_hdri_response(context, s, _addon_prefs(), status_resp)
+            if ok:
+                s.current_job_id = ""
+                s.last_job_error = ""
+                self.report({"INFO"}, message)
+                return {"FINISHED"}
+            s.current_job_status = "failed"
+            s.last_job_error = message
+            self.report({"ERROR"}, message[:300])
+            return {"CANCELLED"}
+
+        s.current_job_status = "failed"
+        s.last_job_error = f"Unexpected job status: {status or '(missing)'}"
+        self.report({"ERROR"}, s.last_job_error)
+        return {"CANCELLED"}
+
+
+class HDRI_OT_cancel_job(Operator):
+    bl_idname = "hdri.cancel_job"
+    bl_label = "Cancel Job"
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        s = context.scene.hdri_api_settings
+        job_id = (s.current_job_id or "").strip()
+        if not job_id:
+            self.report({"INFO"}, "No active job.")
+            return {"CANCELLED"}
+
+        base = prefs.api_base_url.rstrip("/")
+        headers = {}
+        if prefs.api_key:
+            headers["Authorization"] = f"Bearer {prefs.api_key}"
+        try:
+            _http_post_json(f"{base}/v1/jobs/{job_id}/cancel", {}, headers=headers, timeout_s=min(20, int(prefs.timeout_s)))
+        except Exception as e:
+            self.report({"WARNING"}, f"Server cancel failed, clearing local state: {e}")
+
+        s.current_job_status = ""
+        s.current_job_id = ""
+        s.last_job_error = "cancelled by user"
         acct = _safe_get_account(base, headers, timeout_s=10)
         if acct and "tokens_remaining" in acct:
             try:
                 s.tokens_remaining = int(acct["tokens_remaining"])
             except Exception:
                 pass
-        if mode:
-            if mode == "resize":
-                self.report(
-                    {"INFO"},
-                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json).",
-                )
-            else:
-                self.report({"INFO"}, f"HDRI applied (panorama_mode={mode}).")
-        else:
-            self.report({"INFO"}, "HDRI applied to World.")
+        self.report({"INFO"}, "Cancelled current job.")
         return {"FINISHED"}
 
 
@@ -1237,9 +1325,12 @@ class HDRI_PT_panel(Panel):
                 text="On the API host set PANORAMA_MODE=http_json and PANORAMA_HTTP_URL=…",
                 icon="INFO",
             )
+        active_job = (s.current_job_status or "").strip().lower() in {"queued", "running"}
         if s.current_job_id:
             box.label(text=f"Current job: {s.current_job_id}", icon="TIME")
-        if s.current_job_status:
+        if active_job:
+            box.label(text=f"Generating... ({s.current_job_status})", icon="TIME")
+        elif s.current_job_status:
             box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
         if s.last_job_error:
             box.label(text=f"Last error: {s.last_job_error[:100]}", icon="ERROR")
@@ -1266,7 +1357,11 @@ class HDRI_PT_panel(Panel):
         col2.prop(s, "hdr_exposure_bias")
 
         col.separator()
-        col.operator(HDRI_OT_apply_from_api.bl_idname, icon="WORLD")
+        row = col.row(align=True)
+        row.enabled = not active_job
+        row.operator(HDRI_OT_apply_from_api.bl_idname, icon="WORLD")
+        if active_job:
+            col.operator(HDRI_OT_cancel_job.bl_idname, icon="CANCEL")
 
 
 classes = (
@@ -1274,6 +1369,7 @@ classes = (
     HDRI_API_Settings,
     HDRI_OT_refresh_server_config,
     HDRI_OT_apply_from_api,
+    HDRI_OT_cancel_job,
     HDRI_PT_panel,
 )
 

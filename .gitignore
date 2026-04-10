@@ -11,6 +11,9 @@ venv/
 hdri_api_server/data/*.hdr
 hdri_api_server/data/*.exr
 hdri_api_server/data/*.sqlite3
+hdri_api_server/data/*.sqlite3-wal
+hdri_api_server/data/*.sqlite3-shm
+results/
 
 # OS / editor
 .DS_Store

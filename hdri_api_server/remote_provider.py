@@ -76,14 +76,131 @@ class RemoteProvider:
             raise RuntimeError("RUNCOMFY_DEPLOYMENT_ID is required when HDRI_REMOTE_PROVIDER=runcomfy")
         return deployment_id
 
-    def _runcomfy_payload(self, overrides: dict[str, Any] | None) -> dict[str, Any]:
+    @staticmethod
+    def _image_data_uri(image_b64: str) -> str:
+        raw = image_b64.strip()
+        if raw.startswith("data:image/"):
+            return raw
+        return f"data:image/jpeg;base64,{raw}"
+
+    @staticmethod
+    def _parse_node_ids(env_name: str) -> list[str]:
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            return []
+        return [x.strip() for x in raw.split(",") if x.strip()]
+
+    @staticmethod
+    def _set_override_value(dst: dict[str, Any], node_id: str, input_name: str, value: Any) -> None:
+        node = dst.setdefault(str(node_id), {})
+        inputs = node.setdefault("inputs", {})
+        inputs[input_name] = value
+
+    @staticmethod
+    def _quality_steps(quality_mode: str) -> int:
+        if quality_mode == "fast":
+            return int(os.environ.get("RUNCOMFY_FAST_STEPS", "16"))
+        if quality_mode == "high":
+            return int(os.environ.get("RUNCOMFY_HIGH_STEPS", "32"))
+        return int(os.environ.get("RUNCOMFY_BALANCED_STEPS", "24"))
+
+    def _build_runcomfy_overrides(
+        self,
+        *,
+        image_b64: str,
+        width: int,
+        height: int,
+        quality_mode: str,
+        overrides: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+
+        # Optional static baseline overrides, useful for deployment-specific defaults.
+        static_overrides = os.environ.get("RUNCOMFY_OVERRIDES_JSON", "").strip()
+        if static_overrides:
+            parsed = json.loads(static_overrides)
+            if isinstance(parsed, dict):
+                out.update(parsed)
+
+        # If caller already provided RunComfy-style overrides, preserve them.
+        if isinstance(overrides, dict):
+            runcomfy_like = True
+            for k, v in overrides.items():
+                if not isinstance(k, str) or not isinstance(v, dict) or "inputs" not in v:
+                    runcomfy_like = False
+                    break
+            if runcomfy_like:
+                out.update(overrides)
+                return out
+
+        generic = overrides or {}
+        data_uri = self._image_data_uri(image_b64)
+
+        # Image nodes (LoadImage.image)
+        for node_id in self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS"):
+            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_IMAGE_INPUT_NAME", "image"), data_uri)
+
+        # Prompt nodes
+        prompt = generic.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            for node_id in self._parse_node_ids("RUNCOMFY_PROMPT_NODE_IDS"):
+                self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_PROMPT_INPUT_NAME", "text"), prompt)
+
+        negative = generic.get("negative_prompt")
+        if isinstance(negative, str) and negative.strip():
+            for node_id in self._parse_node_ids("RUNCOMFY_NEGATIVE_PROMPT_NODE_IDS"):
+                self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_NEGATIVE_PROMPT_INPUT_NAME", "text"), negative)
+
+        if generic.get("seed") is not None:
+            for node_id in self._parse_node_ids("RUNCOMFY_SEED_NODE_IDS"):
+                self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_SEED_INPUT_NAME", "seed"), generic["seed"])
+
+        if generic.get("strength") is not None:
+            for node_id in self._parse_node_ids("RUNCOMFY_STRENGTH_NODE_IDS"):
+                self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STRENGTH_INPUT_NAME", "denoise"), generic["strength"])
+
+        if generic.get("reference_coverage") is not None:
+            for node_id in self._parse_node_ids("RUNCOMFY_REFERENCE_COVERAGE_NODE_IDS"):
+                self._set_override_value(
+                    out,
+                    node_id,
+                    os.environ.get("RUNCOMFY_REFERENCE_COVERAGE_INPUT_NAME", "reference_coverage"),
+                    generic["reference_coverage"],
+                )
+
+        # Resolution and quality controls.
+        for node_id in self._parse_node_ids("RUNCOMFY_DIMENSION_NODE_IDS"):
+            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_WIDTH_INPUT_NAME", "width"), width)
+            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_HEIGHT_INPUT_NAME", "height"), height)
+
+        for node_id in self._parse_node_ids("RUNCOMFY_STEPS_NODE_IDS"):
+            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STEPS_INPUT_NAME", "steps"), self._quality_steps(quality_mode))
+
+        return out
+
+    def _runcomfy_payload(
+        self,
+        *,
+        image_b64: str,
+        width: int,
+        height: int,
+        quality_mode: str,
+        overrides: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         workflow_path = os.environ.get("RUNCOMFY_WORKFLOW_JSON_PATH", "").strip()
         if workflow_path:
             with open(workflow_path, encoding="utf-8") as f:
                 payload["workflow_api_json"] = json.load(f)
-        if overrides:
-            payload["overrides"] = overrides
+        runcomfy_overrides = self._build_runcomfy_overrides(
+            image_b64=image_b64,
+            width=width,
+            height=height,
+            quality_mode=quality_mode,
+            overrides=overrides,
+        )
+        if runcomfy_overrides:
+            payload["overrides"] = runcomfy_overrides
         webhook = os.environ.get("RUNCOMFY_WEBHOOK_URL", "").strip()
         if webhook:
             payload["webhook"] = webhook
@@ -99,13 +216,19 @@ class RemoteProvider:
         quality_mode: str,
         overrides: dict[str, Any] | None = None,
     ) -> ProviderSubmitResult:
-        _ = (image_b64, width, height, scene_mode, quality_mode)
+        _ = scene_mode
         mode = self._provider_mode()
         if mode == "runcomfy":
             base = self._runcomfy_base()
             deployment_id = self._runcomfy_deployment_id()
             url = f"{base}/prod/v1/deployments/{deployment_id}/inference"
-            payload = self._runcomfy_payload(overrides)
+            payload = self._runcomfy_payload(
+                image_b64=image_b64,
+                width=width,
+                height=height,
+                quality_mode=quality_mode,
+                overrides=overrides,
+            )
             data = self._http_json(url, "POST", payload=payload, headers=self._runcomfy_headers())
             request_id = str(data.get("request_id", "")).strip()
             if not request_id:
