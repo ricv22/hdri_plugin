@@ -1,0 +1,9 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+    encode gzip
+
+    reverse_proxy hdri_api:8000
+}

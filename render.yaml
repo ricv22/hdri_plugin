@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: hdri-api
+    runtime: docker
+    rootDir: hdri_api_server
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /v1/config
+    envVars:
+      - key: HDRI_DATA_DIR
+        value: /app/data
+      - key: HDRI_DB_PATH
+        value: /app/data/state.sqlite3
+      - key: HDRI_REQUIRE_API_KEY
+        value: "1"
+      - key: HDRI_MAX_ACTIVE_JOBS_PER_ACCOUNT
+        value: "2"
+      - key: HDRI_STALE_REAPER_INTERVAL_S
+        value: "30"
+      - key: HDRI_STALE_JOB_TIMEOUT_S
+        value: "900"
+      - key: HDRI_REMOTE_PROVIDER
+        value: runcomfy
+      - key: RUNCOMFY_BASE_URL
+        value: https://api.runcomfy.net
+      - key: HDRI_PUBLIC_BASE_URL
+        sync: false
+      - key: HDRI_SIGNING_SECRET
+        generateValue: true
+      - key: HDRI_ADMIN_TOKEN
+        generateValue: true
+      - key: RUNCOMFY_API_TOKEN
+        sync: false
+      - key: RUNCOMFY_DEPLOYMENT_ID
+        sync: false
+    disk:
+      name: hdri-api-data
+      mountPath: /app/data
+      sizeGB: 5

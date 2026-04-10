@@ -2,6 +2,13 @@
 
 This project is designed so your public API server orchestrates jobs while a third-party provider (for example RunComfy) executes the actual ComfyUI workflow.
 
+Recommended production split for this repo:
+
+- website/portfolio on WEDOS
+- API backend on Render
+- workflow execution on RunComfy
+- later object storage only if local artifact storage becomes limiting
+
 ## 1) Required API server env vars
 
 - `HDRI_PUBLIC_BASE_URL` - public HTTPS URL for signed file links.
@@ -57,6 +64,17 @@ Response includes:
 - `api_key` (shown once; store securely)
 - `tokens_remaining`
 
+CLI helper from this repo:
+
+```powershell
+cd hdri_api_server
+python scripts/provision_account.py `
+  --base-url https://api.example.com `
+  --admin-token "<HDRI_ADMIN_TOKEN>" `
+  --account-id customer-001 `
+  --initial-tokens 50
+```
+
 ## 5) Token accounting defaults
 
 - `quality_mode=fast` -> 1 token
@@ -75,3 +93,9 @@ Flow:
 - Back up SQLite (`state.sqlite3`) or move to managed DB when needed.
 - Rotate provider API token and admin token periodically.
 - Validate RunComfy node-ID mapping after workflow edits.
+
+Related rollout docs:
+
+- `SCALING_MIGRATION.md` for object storage + managed database migration
+- `PORTAL_ROADMAP.md` for when to introduce a web portal/library
+- `RENDER_SETUP.md` for WEDOS domain + Render API deployment steps

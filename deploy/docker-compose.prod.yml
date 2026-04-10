@@ -1,0 +1,41 @@
+services:
+  hdri_api:
+    build:
+      context: ../hdri_api_server
+      dockerfile: Dockerfile
+    container_name: hdri_api
+    restart: unless-stopped
+    env_file:
+      - ../hdri_api_server/.env
+    environment:
+      HDRI_PUBLIC_BASE_URL: ${HDRI_PUBLIC_BASE_URL}
+      HDRI_SIGNING_SECRET: ${HDRI_SIGNING_SECRET}
+      HDRI_REQUIRE_API_KEY: ${HDRI_REQUIRE_API_KEY:-1}
+      HDRI_ADMIN_TOKEN: ${HDRI_ADMIN_TOKEN}
+      HDRI_REMOTE_PROVIDER: ${HDRI_REMOTE_PROVIDER:-runcomfy}
+      RUNCOMFY_API_TOKEN: ${RUNCOMFY_API_TOKEN}
+      RUNCOMFY_DEPLOYMENT_ID: ${RUNCOMFY_DEPLOYMENT_ID}
+      RUNCOMFY_BASE_URL: ${RUNCOMFY_BASE_URL:-https://api.runcomfy.net}
+    volumes:
+      - hdri_data:/app/data
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2.8
+    container_name: hdri_caddy
+    restart: unless-stopped
+    depends_on:
+      - hdri_api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  hdri_data:
+  caddy_data:
+  caddy_config:

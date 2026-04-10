@@ -118,6 +118,13 @@ Returns authenticated account usage:
 
 Creates a real account and returns a new API key (shown once). Requires `X-Admin-Token` header matching `HDRI_ADMIN_TOKEN`.
 
+Provision helper:
+
+```powershell
+cd hdri_api_server
+python scripts/provision_account.py --base-url https://api.example.com --admin-token "<token>" --account-id user-a --initial-tokens 25
+```
+
 ### `GET /v1/files/{id}.hdr?exp=...&sig=...`
 
 Downloads the HDR file.
@@ -153,6 +160,15 @@ RunComfy env (when using `runcomfy`):
 - optional `RUNCOMFY_POLL_TIMEOUT_S`
 - optional `RUNCOMFY_OVERRIDES_JSON` for static baseline node overrides
 - optional `RUNCOMFY_*_NODE_IDS` mappings to inject image/prompt/seed/strength/reference_coverage/width/height/steps
+
+Run provider mapping validation locally before deploying:
+
+```powershell
+cd hdri_api_server
+python scripts/validate_runcomfy_mapping.py
+```
+
+This prints the resolved RunComfy payload and fails with warning when `overrides` are not being generated.
 
 ## Local ComfyUI worker (recommended for V1)
 
@@ -282,3 +298,33 @@ Outputs:
 
 - `benchmarks/local_worker_metrics.csv`
 - `benchmarks/local_worker_report.md`
+
+## Production deployment (container + HTTPS)
+
+This repository includes:
+
+- `hdri_api_server/Dockerfile`
+- `deploy/docker-compose.prod.yml`
+- `deploy/Caddyfile`
+
+Quick start:
+
+```powershell
+cd deploy
+$env:API_DOMAIN="api.example.com"
+$env:ACME_EMAIL="ops@example.com"
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+## Render deployment (recommended hosted backend)
+
+For the `WEDOS website + Render API + RunComfy` setup, use:
+
+- `render.yaml`
+- `RENDER_SETUP.md`
+
+Recommended domain split:
+
+- `richardandrys.com` -> website
+- `richardandrys.com/hdri-addon` -> landing page
+- `api.richardandrys.com` -> FastAPI backend
