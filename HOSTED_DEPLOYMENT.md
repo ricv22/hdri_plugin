@@ -2,10 +2,20 @@
 
 This project is designed so your public API server orchestrates jobs while a third-party provider (for example RunComfy) executes the actual ComfyUI workflow.
 
-Recommended production split for this repo:
+Recommended splits for this repo:
+
+**Current testing (your setup):**
+
+- Blender → `https://api.richardandrys.com`
+- API on **notebook** (`uvicorn`), public HTTPS via **tunnel** (e.g. Cloudflare Tunnel)
+- GPU / workflow on **RunComfy**
+
+See [NOTEBOOK_DOMAIN_SETUP.md](NOTEBOOK_DOMAIN_SETUP.md).
+
+**Alternative production split:**
 
 - website/portfolio on WEDOS
-- API backend on Render
+- API backend on Render, VPS (Oracle/Hetzner), etc.
 - workflow execution on RunComfy
 - later object storage only if local artifact storage becomes limiting
 
@@ -96,6 +106,7 @@ Flow:
 
 Related rollout docs:
 
+- `NOTEBOOK_DOMAIN_SETUP.md` for notebook + `api.richardandrys.com` + RunComfy
 - `SCALING_MIGRATION.md` for object storage + managed database migration
 - `PORTAL_ROADMAP.md` for when to introduce a web portal/library
-- `RENDER_SETUP.md` for WEDOS domain + Render API deployment steps
+- `RENDER_SETUP.md` for optional Render API deployment

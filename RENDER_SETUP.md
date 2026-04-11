@@ -1,6 +1,8 @@
 # Render Setup Guide
 
-This is the recommended hosted backend setup for:
+If you are using a **notebook + tunnel** for `api.richardandrys.com` instead of Render, see [NOTEBOOK_DOMAIN_SETUP.md](NOTEBOOK_DOMAIN_SETUP.md).
+
+This guide is the optional **Render** hosted backend setup for:
 
 - domain + website on WEDOS
 - API backend on Render

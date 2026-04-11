@@ -34,6 +34,14 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 Open `http://127.0.0.1:8000/docs`.
 
+### Notebook + `api.richardandrys.com` + RunComfy
+
+For the setup where Blender calls `https://api.richardandrys.com`, the API runs on your notebook behind an HTTPS tunnel, and RunComfy runs the GPU workflow:
+
+- Configure `hdri_api_server/.env` (see `.env.example` header comments).
+- Run: `uvicorn app:app --host 0.0.0.0 --port 8000`
+- Full checklist: [NOTEBOOK_DOMAIN_SETUP.md](../NOTEBOOK_DOMAIN_SETUP.md)
+
 ## API
 
 ### `POST /v1/hdri`
