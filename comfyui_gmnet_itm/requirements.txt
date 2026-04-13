@@ -1,0 +1,2 @@
+# ComfyUI already ships torch; GMNet needs OpenCV for preprocessing.
+opencv-python-headless>=4.8.0

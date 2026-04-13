@@ -43,6 +43,35 @@ pip install -r requirements.txt
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
+## 2b) Optional: GMNet gain-map HDR (recommended over Flux img2img for reconstruction-shaped HDR)
+
+This repo includes a ComfyUI custom node package: `comfyui_gmnet_itm/` (copy or symlink it into ComfyUI’s `custom_nodes/` folder).
+
+1. Clone [GMNet](https://github.com/qtlark/GMNet) and download a checkpoint (e.g. `checkpoints/G_synthetic.pth` from the repo / release assets).
+2. Install node deps inside ComfyUI’s Python (OpenCV): `pip install -r comfyui_gmnet_itm/requirements.txt` (path relative to this repo).
+3. Set environment variables **before starting ComfyUI** (system env, or use this repo’s launcher):
+
+- **Launcher (Windows):** `scripts/run_comfyui_with_gmnet.bat` — sets `GMNET_*` and starts ComfyUI with `D:\ComfyUI\.venv\Scripts\python.exe` and `D:\ComfyUI\resources\ComfyUI\main.py`. Edit paths inside the `.bat` if your layout differs.
+
+Or set manually:
+
+```env
+GMNET_CODES_ROOT=D:/gmnet/GMNet/codes
+GMNET_CHECKPOINT=D:/gmnet/GMNet/checkpoints/G_synthetic.pth
+```
+
+Optional: `GMNET_REPO_ROOT=D:/gmnet/GMNet` if you omit `GMNET_CHECKPOINT` and keep weights at `GMNET_REPO_ROOT/checkpoints/G_synthetic.pth`.
+
+4. **HDR workflow JSON — set on the panorama worker (port 8001), not on ComfyUI.** The worker reads `COMFYUI_HDR_WORKFLOW_TEMPLATE` when it handles `POST /v1/hdr_restore`. Put it in the **same place you set `COMFYUI_SERVER_URL`** (worker’s shell, or a `.env` loaded before `uvicorn examples.comfyui_worker`):
+
+```env
+COMFYUI_HDR_WORKFLOW_TEMPLATE=examples/comfyui_gmnet_hdr_restore_api.json
+```
+
+If you start the worker with `cd hdri_api_server`, that path is relative to **`hdri_api_server`** and resolves to `hdri_api_server/examples/comfyui_gmnet_hdr_restore_api.json`. For a fixed path, use an absolute path to that file instead.
+
+Workflow file in repo: `hdri_api_server/examples/comfyui_gmnet_hdr_restore_api.json` — **LoadImage → GMNetHDRITM → SaveImage**.
+
 ## 3) Configure and run local worker
 
 Worker env options (set in shell or `.env` for your worker process):
