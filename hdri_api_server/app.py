@@ -417,7 +417,7 @@ def _run_comfyui_hdr_restore(req: HdriRequest, pano_rgb: np.ndarray) -> np.ndarr
     pano_u8 = np.clip(pano_rgb * 255.0, 0.0, 255.0).astype(np.uint8)
     buf = io.BytesIO()
     Image.fromarray(pano_u8, mode="RGB").save(buf, format="PNG")
-    data = hdr_http_json(
+    result = hdr_http_json(
         image_b64=base64.b64encode(buf.getvalue()).decode("ascii"),
         width=req.output_width,
         height=req.output_height,
@@ -425,11 +425,14 @@ def _run_comfyui_hdr_restore(req: HdriRequest, pano_rgb: np.ndarray) -> np.ndarr
         request_overrides=_build_hdr_restore_overrides(req),
     )
 
-    if "hdr_b64" in data:
-        raw = base64.b64decode(str(data["hdr_b64"]))
+    # panorama.hdr_http_json returns a PIL Image (worker PNG). Older code wrongly treated it as a dict.
+    if isinstance(result, Image.Image):
+        restored_rgb = np.asarray(result.convert("RGB")).astype(np.float32) / 255.0
+    elif isinstance(result, dict) and "hdr_b64" in result:
+        raw = base64.b64decode(str(result["hdr_b64"]))
         return read_rgbe_hdr_bytes(raw)
-
-    restored_rgb = np.asarray(data).astype(np.float32) / 255.0
+    else:
+        restored_rgb = np.asarray(result).astype(np.float32) / 255.0
     restored_lin = _srgb_to_linear(restored_rgb)
     if abs(req.hdr_exposure_bias) > 1e-6:
         restored_lin = restored_lin * (2.0 ** float(req.hdr_exposure_bias))

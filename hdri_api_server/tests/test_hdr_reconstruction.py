@@ -113,5 +113,24 @@ class HDRFailoverTests(unittest.TestCase):
         self.assertTrue(mock_write.called)
 
 
+class ComfyuiHdrRestorePilTests(unittest.TestCase):
+    """hdr_http_json returns PIL.Image; _run_comfyui_hdr_restore must accept that (not treat as dict)."""
+
+    @patch("app.hdr_http_json", autospec=True)
+    def test_run_comfyui_hdr_restore_accepts_pil_image(self, mock_hdr_json):
+        mock_hdr_json.return_value = Image.new("RGB", (128, 64), (200, 100, 50))
+        req = app_mod.HdriRequest(
+            image_b64="x",
+            output_width=128,
+            output_height=64,
+            hdr_reconstruction_mode="comfyui_hdr",
+        )
+        pano = np.full((64, 128, 3), 0.4, dtype=np.float32)
+        out = app_mod._run_comfyui_hdr_restore(req, pano)
+        self.assertEqual(out.shape, (64, 128, 3))
+        self.assertEqual(out.dtype, np.float32)
+        mock_hdr_json.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

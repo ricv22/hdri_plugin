@@ -106,7 +106,9 @@ Addon preferences:
 
 - API base URL: `http://127.0.0.1:8000`
 - Timeout: start with `180` or `300`
-- HDR reconstruction: `ComfyUI HDR` (recommended) or `AI Fast` as fallback
+- **HDR reconstruction:** set to **`ComfyUI HDR`** if you use the GMNet worker path. The addon default is **`AI Fast`**, which does **not** call ComfyUI for HDR (server-side `ai_fast` only).
+
+**If ComfyUI never runs the HDR restore:** (1) Blender panel → **HDR Reconstruction = ComfyUI HDR**. (2) API server `.env`: `HDR_RECONSTRUCTION_MODE_DEFAULT=comfyui_hdr` and `HDR_HTTP_URL=http://127.0.0.1:8001/v1/hdr_restore`. (3) Panorama worker on **8001** running, `COMFYUI_SERVER_URL` pointing at ComfyUI **8188**, and ComfyUI running before the job hits HDR restore.
 
 Panel defaults for V1:
 
