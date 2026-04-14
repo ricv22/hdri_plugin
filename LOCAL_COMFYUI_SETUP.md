@@ -47,7 +47,7 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 This repo includes a ComfyUI custom node package: `comfyui_gmnet_itm/` (copy or symlink it into ComfyUI’s `custom_nodes/` folder).
 
-1. Clone [GMNet](https://github.com/qtlark/GMNet) and download a checkpoint (e.g. `checkpoints/G_synthetic.pth` from the repo / release assets).
+1. Clone [GMNet](https://github.com/qtlark/GMNet) and download checkpoints under `checkpoints/` (e.g. **`G_real.pth`** for real-world-style SDR, or `G_synthetic.pth` for synthetic data).
 2. Install node deps inside ComfyUI’s Python (OpenCV): `pip install -r comfyui_gmnet_itm/requirements.txt` (path relative to this repo).
 3. Set environment variables **before starting ComfyUI** (system env, or use this repo’s launcher):
 
@@ -57,10 +57,10 @@ Or set manually:
 
 ```env
 GMNET_CODES_ROOT=D:/gmnet/GMNet/codes
-GMNET_CHECKPOINT=D:/gmnet/GMNet/checkpoints/G_synthetic.pth
+GMNET_CHECKPOINT=D:/gmnet/GMNet/checkpoints/G_real.pth
 ```
 
-Optional: `GMNET_REPO_ROOT=D:/gmnet/GMNet` if you omit `GMNET_CHECKPOINT` and keep weights at `GMNET_REPO_ROOT/checkpoints/G_synthetic.pth`.
+Optional: `GMNET_REPO_ROOT=D:/gmnet/GMNet` — if `GMNET_CHECKPOINT` is unset, the node tries `checkpoints/G_real.pth` first, then `G_synthetic.pth`.
 
 4. **HDR workflow JSON — set on the panorama worker (port 8001), not on ComfyUI.** The worker reads `COMFYUI_HDR_WORKFLOW_TEMPLATE` when it handles `POST /v1/hdr_restore`. Put it in the **same place you set `COMFYUI_SERVER_URL`** (worker’s shell, or a `.env` loaded before `uvicorn examples.comfyui_worker`):
 
@@ -72,6 +72,14 @@ If you start the worker with `cd hdri_api_server`, that path is relative to **`h
 
 Workflow file in repo: `hdri_api_server/examples/comfyui_gmnet_hdr_restore_api.json` — **LoadImage → GMNetHDRITM → SaveImage**.
 
+**Editing that JSON (API export format):** Under node **`2`** (`GMNetHDRITM`), `inputs` includes:
+
+- **`checkpoint_path`**: absolute path to the weights file, e.g. `"D:/gmnet/GMNet/checkpoints/G_real.pth"`. Use forward slashes. Set to `""` to rely on `GMNET_CHECKPOINT` / `GMNET_REPO_ROOT` in the ComfyUI environment instead.
+- **`preview_ev`**: float, linear HDR boost before PNG encoding (`2^preview_ev`). Example: `0.5` ≈ +0.5 EV; try `0.0`–`1.5` depending on how bright you want highlights in the `.hdr`.
+- **`peak`**, **`scale`**: same as in the Comfy UI node.
+
+**Why HDR can look almost unchanged:** GMNet was trained on a specific SDR/HDR pipeline; on arbitrary equirect panoramas the predicted gain map is often subtle. Prefer **`G_real.pth`** for typical photos; raise **`peak`**, or increase **`preview_ev`**, if the result looks flat.
+
 ## 3) Configure and run local worker
 
 Worker env options (set in shell or `.env` for your worker process):
@@ -79,8 +87,10 @@ Worker env options (set in shell or `.env` for your worker process):
 ```env
 COMFYUI_SERVER_URL=http://127.0.0.1:8188
 COMFYUI_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_template.json
-COMFYUI_HDR_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_4b_hdr_restore_api.json
-# Optional overrides (prefer workflow defaults if using exported API JSON)
+# HDR stage default is GMNet (no second Flux run). Override only if you want Flux img2img HDR:
+# COMFYUI_HDR_WORKFLOW_TEMPLATE=examples/comfyui_flux2_klein_4b_hdr_restore_api.json
+COMFYUI_HDR_WORKFLOW_TEMPLATE=examples/comfyui_gmnet_hdr_restore_api.json
+# Optional overrides (panorama / Flux HDR template only)
 # COMFYUI_BASE_MODEL=flux-2-klein-base-4b.safetensors
 # COMFYUI_KLEIN_LORA=flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors
 COMFYUI_BALANCED_STEPS=28
@@ -88,6 +98,8 @@ COMFYUI_DEFAULT_STRENGTH=1.0
 COMFYUI_HDR_BALANCED_STEPS=28
 COMFYUI_HDR_DEFAULT_STRENGTH=0.35
 ```
+
+`GET http://127.0.0.1:8001/health` shows which HDR workflow file is active. After `POST /v1/hdr_restore`, the JSON response `meta` includes `hdr_workflow_template` (basename) so you can confirm GMNet vs Flux.
 
 Run:
 
@@ -115,7 +127,7 @@ Panel defaults for V1:
 - Output resolution: `2048x1024`
 - ERP layout: `single_front`
 - Reference coverage: `0.60`
-- Seam fix: enabled
+- Seam fix: **off** by default (enable in the panel only if you see a bad left/right wrap)
 
 ## 5) Benchmark quick check
 

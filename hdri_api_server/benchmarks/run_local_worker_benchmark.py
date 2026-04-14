@@ -88,7 +88,7 @@ def main() -> int:
             "quality_mode": "balanced",
             "erp_layout_mode": "single_front",
             "reference_coverage": 0.40,
-            "seam_fix": True,
+            "seam_fix": False,
         }
         row = {"case": f"{kind}_{idx:02d}", "scene_mode": kind}
         try:

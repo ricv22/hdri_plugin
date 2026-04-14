@@ -121,9 +121,13 @@ def _hdr_quality_steps(mode: str) -> int:
 
 
 def _default_seam_fix(mode: str) -> bool:
-    if mode == "fast":
-        return False
-    return True
+    """
+    Post-pass seam blend is optional; many Flux panoramas are already consistent.
+    Default off. Set COMFYUI_SEAM_FIX_DEFAULT=1 to restore old behavior (on for balanced/high).
+    """
+    if _env("COMFYUI_SEAM_FIX_DEFAULT", "").strip().lower() in ("1", "true", "yes"):
+        return mode != "fast"
+    return False
 
 
 def _workflow_has_node_type(workflow: dict[str, Any], class_type: str) -> bool:
@@ -548,11 +552,12 @@ def run_comfyui_generation(
     return out.resize((body.width, body.height), resample=Image.LANCZOS)
 
 
-def run_comfyui_hdr_restore(body: HDRRestoreRequest, input_image: Image.Image) -> Image.Image:
+def run_comfyui_hdr_restore(body: HDRRestoreRequest, input_image: Image.Image) -> tuple[Image.Image, str]:
     base_url = _env("COMFYUI_SERVER_URL", "http://127.0.0.1:8188")
+    # Default: GMNet-only workflow (LoadImage → GMNetHDRITM → SaveImage). Flux HDR img2img is opt-in via env.
     template_path = _env(
         "COMFYUI_HDR_WORKFLOW_TEMPLATE",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfyui_flux2_klein_4b_hdr_restore_api.json"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "comfyui_gmnet_hdr_restore_api.json"),
     )
     if not os.path.isfile(template_path):
         raise RuntimeError(
@@ -652,7 +657,8 @@ def run_comfyui_hdr_restore(body: HDRRestoreRequest, input_image: Image.Image) -
         preferred_output_node_ids=preferred_output_node_ids,
     )
     out = Image.open(io.BytesIO(raw)).convert("RGB")
-    return out.resize((body.width, body.height), resample=Image.LANCZOS)
+    out = out.resize((body.width, body.height), resample=Image.LANCZOS)
+    return out, template_path
 
 
 @app.get("/health")
@@ -664,7 +670,7 @@ def health():
         "workflow_template": _env("COMFYUI_WORKFLOW_TEMPLATE", "examples/comfyui_flux2_klein_template.json"),
         "hdr_workflow_template": _env(
             "COMFYUI_HDR_WORKFLOW_TEMPLATE",
-            "examples/comfyui_flux2_klein_4b_hdr_restore_api.json",
+            "examples/comfyui_gmnet_hdr_restore_api.json",
         ),
     }
 
@@ -732,7 +738,7 @@ def hdr_restore(body: HDRRestoreRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid image_b64: {e}") from e
 
     try:
-        out = run_comfyui_hdr_restore(body, src.resize((body.width, body.height), resample=Image.LANCZOS))
+        out, template_path = run_comfyui_hdr_restore(body, src.resize((body.width, body.height), resample=Image.LANCZOS))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"ComfyUI HDR restore failed: {e}") from e
 
@@ -742,6 +748,8 @@ def hdr_restore(body: HDRRestoreRequest) -> dict[str, Any]:
             "worker": "comfyui_hdr_restore_v1",
             "width": out.width,
             "height": out.height,
+            "hdr_workflow_template": os.path.basename(template_path),
+            "hdr_workflow_template_path": template_path,
         },
     }
 

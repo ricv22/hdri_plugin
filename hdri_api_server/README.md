@@ -64,7 +64,7 @@ Example body:
   "panorama_strength": null,
   "erp_layout_mode": "single_front",
   "reference_coverage": 0.6,
-  "seam_fix": true,
+  "seam_fix": false,
   "erp_canvas_width": null,
   "erp_canvas_height": null,
   "panorama_extra": null,
@@ -215,7 +215,7 @@ ERP placement fields (V1):
 
 - `erp_layout_mode` (`single_front`)
 - `reference_coverage` (`0.15..0.85`, default `0.60`)
-- `seam_fix` (optional bool, quality-based default if omitted)
+- `seam_fix` (optional bool; default **off** in worker unless `COMFYUI_SEAM_FIX_DEFAULT=1`)
 - `erp_canvas_width` / `erp_canvas_height` (optional 2:1 control canvas)
 
 Response must include one of:

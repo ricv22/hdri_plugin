@@ -4,7 +4,7 @@ REM GMNet clone: https://github.com/qtlark/GMNet — place checkpoints under GMNet
 
 set "GMNET_CODES_ROOT=D:\gmnet\GMNet\codes"
 set "GMNET_REPO_ROOT=D:\gmnet\GMNet"
-set "GMNET_CHECKPOINT=D:\gmnet\GMNet\checkpoints\G_synthetic.pth"
+set "GMNET_CHECKPOINT=D:\gmnet\GMNet\checkpoints\G_real.pth"
 
 set "COMFYUI_VENV_PYTHON=D:\ComfyUI\.venv\Scripts\python.exe"
 set "COMFYUI_MAIN_DIR=D:\ComfyUI\resources\ComfyUI"

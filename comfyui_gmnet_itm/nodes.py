@@ -41,12 +41,14 @@ def _default_checkpoint() -> str:
     # Common layout: clone GMNet next to ComfyUI and put checkpoints under GMNet/checkpoints/
     root = os.environ.get("GMNET_REPO_ROOT", "").strip()
     if root:
-        cand = os.path.join(root, "checkpoints", "G_synthetic.pth")
-        if os.path.isfile(cand):
-            return cand
+        ckpt_dir = os.path.join(root, "checkpoints")
+        for name in ("G_real.pth", "G_synthetic.pth"):
+            cand = os.path.join(ckpt_dir, name)
+            if os.path.isfile(cand):
+                return cand
     raise RuntimeError(
-        "Set GMNET_CHECKPOINT to G_synthetic.pth (or G_real.pth), or set "
-        "GMNET_REPO_ROOT to the GMNet repo root containing checkpoints/G_synthetic.pth"
+        "Set GMNET_CHECKPOINT to a .pth file, or set GMNET_REPO_ROOT to the GMNet repo root "
+        "containing checkpoints/G_real.pth or checkpoints/G_synthetic.pth"
     )
 
 
@@ -170,7 +172,9 @@ def _hdr_bgr_from_qgm(lq_bgr_hwc: np.ndarray, qgm_hw1: np.ndarray, *, peak: floa
 def _linear_rgb_to_display_srgb(rgb_lin: np.ndarray) -> np.ndarray:
     """Map linear RGB (unbounded) to [0,1] display sRGB for PNG / Comfy IMAGE."""
     x = np.clip(rgb_lin, 0.0, None)
-    med = float(np.percentile(x, 99.5)) if x.size else 1.0
+    # Equirect / bright skies: 99.5th percentile is often sky-dominated and washes out local contrast.
+    # Use 99.9 so mids/highlights retain more separation vs a flat reinhard anchor.
+    med = float(np.percentile(x, 99.9)) if x.size else 1.0
     scale = max(med, 1e-4)
     x = x / (1.0 + x / scale)
     x = np.clip(x, 0.0, 1.0)
@@ -202,6 +206,16 @@ class GMNetHDRITM:
                     "FLOAT",
                     {"default": 1.0, "min": 0.25, "max": 1.0, "step": 0.25, "tooltip": "Downsample factor for LQ branch (1 = full resolution)"},
                 ),
+                "preview_ev": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": -2.0,
+                        "max": 4.0,
+                        "step": 0.25,
+                        "tooltip": "Multiply linear HDR by 2^EV before LDR encoding. Use +0.5–1.5 if highlights look unchanged (PNG/hdr brightness).",
+                    },
+                ),
             },
             "optional": {
                 "checkpoint_path": (
@@ -220,6 +234,7 @@ class GMNetHDRITM:
         images: torch.Tensor,
         peak: float,
         scale: float,
+        preview_ev: float,
         checkpoint_path: str = "",
     ) -> tuple[torch.Tensor]:
         ckpt = checkpoint_path.strip() if checkpoint_path else ""
@@ -245,6 +260,9 @@ class GMNetHDRITM:
             qgm_np = _tensor_qgm_to_numpy(qgm.cpu())
             hdr_bgr = _hdr_bgr_from_qgm(lq_bgr, qgm_np, peak=float(peak), scale=float(scale))
             hdr_rgb = hdr_bgr[:, :, ::-1]
+            ev = float(preview_ev)
+            if abs(ev) > 1e-6:
+                hdr_rgb = np.clip(hdr_rgb * (2.0**ev), 0.0, None)
             disp = _linear_rgb_to_display_srgb(hdr_rgb)
             out_frames.append(disp)
 

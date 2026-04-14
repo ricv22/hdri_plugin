@@ -776,8 +776,8 @@ class HDRI_API_Settings(PropertyGroup):
     )
     seam_fix: BoolProperty(
         name="Seam Fix",
-        description="Enable seam smoothing/fix step in worker",
-        default=True,
+        description="Worker post-blend at ERP left/right wrap (can soften real detail; leave off if panorama is already good)",
+        default=False,
     )
     erp_canvas_width: IntProperty(
         name="ERP Canvas Width",
