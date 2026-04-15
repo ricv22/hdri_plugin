@@ -18,7 +18,7 @@
       "peak": 8.0,
       "scale": 1.0,
       "preview_ev": 0.5,
-      "checkpoint_path": "D:/gmnet/GMNet/checkpoints/G_real.pth"
+      "checkpoint_path": "D:/gmnet/GMNet/checkpoints/G_realworld.pth"
     },
     "class_type": "GMNetHDRITM",
     "_meta": {

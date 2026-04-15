@@ -47,8 +47,8 @@ uvicorn app:app --host 127.0.0.1 --port 8000
 
 This repo includes a ComfyUI custom node package: `comfyui_gmnet_itm/` (copy or symlink it into ComfyUI’s `custom_nodes/` folder).
 
-1. Clone [GMNet](https://github.com/qtlark/GMNet) and download checkpoints under `checkpoints/` (e.g. **`G_real.pth`** for real-world-style SDR, or `G_synthetic.pth` for synthetic data).
-2. Install node deps inside ComfyUI’s Python (OpenCV): `pip install -r comfyui_gmnet_itm/requirements.txt` (path relative to this repo).
+1. Clone [GMNet](https://github.com/qtlark/GMNet) and download checkpoints under `checkpoints/` (e.g. **`G_realworld.pth`** for real-world-style SDR, or `G_synthetic.pth` for synthetic data; some releases use `G_real.pth` instead).
+2. The GMNet node uses only torch + numpy (no separate `pip install` needed for this package).
 3. Set environment variables **before starting ComfyUI** (system env, or use this repo’s launcher):
 
 - **Launcher (Windows):** `scripts/run_comfyui_with_gmnet.bat` — sets `GMNET_*` and starts ComfyUI with `D:\ComfyUI\.venv\Scripts\python.exe` and `D:\ComfyUI\resources\ComfyUI\main.py`. Edit paths inside the `.bat` if your layout differs.
@@ -57,10 +57,10 @@ Or set manually:
 
 ```env
 GMNET_CODES_ROOT=D:/gmnet/GMNet/codes
-GMNET_CHECKPOINT=D:/gmnet/GMNet/checkpoints/G_real.pth
+GMNET_CHECKPOINT=D:/gmnet/GMNet/checkpoints/G_realworld.pth
 ```
 
-Optional: `GMNET_REPO_ROOT=D:/gmnet/GMNet` — if `GMNET_CHECKPOINT` is unset, the node tries `checkpoints/G_real.pth` first, then `G_synthetic.pth`.
+Optional: `GMNET_REPO_ROOT=D:/gmnet/GMNet` — if `GMNET_CHECKPOINT` is unset, the node tries `checkpoints/G_realworld.pth` first, then `G_real.pth`, then `G_synthetic.pth`.
 
 4. **HDR workflow JSON — set on the panorama worker (port 8001), not on ComfyUI.** The worker reads `COMFYUI_HDR_WORKFLOW_TEMPLATE` when it handles `POST /v1/hdr_restore`. Put it in the **same place you set `COMFYUI_SERVER_URL`** (worker’s shell, or a `.env` loaded before `uvicorn examples.comfyui_worker`):
 
@@ -74,11 +74,11 @@ Workflow file in repo: `hdri_api_server/examples/comfyui_gmnet_hdr_restore_api.j
 
 **Editing that JSON (API export format):** Under node **`2`** (`GMNetHDRITM`), `inputs` includes:
 
-- **`checkpoint_path`**: absolute path to the weights file, e.g. `"D:/gmnet/GMNet/checkpoints/G_real.pth"`. Use forward slashes. Set to `""` to rely on `GMNET_CHECKPOINT` / `GMNET_REPO_ROOT` in the ComfyUI environment instead.
+- **`checkpoint_path`**: absolute path to the weights file, e.g. `"D:/gmnet/GMNet/checkpoints/G_realworld.pth"`. Use forward slashes. Set to `""` to rely on `GMNET_CHECKPOINT` / `GMNET_REPO_ROOT` in the ComfyUI environment instead.
 - **`preview_ev`**: float, linear HDR boost before PNG encoding (`2^preview_ev`). Example: `0.5` ≈ +0.5 EV; try `0.0`–`1.5` depending on how bright you want highlights in the `.hdr`.
 - **`peak`**, **`scale`**: same as in the Comfy UI node.
 
-**Why HDR can look almost unchanged:** GMNet was trained on a specific SDR/HDR pipeline; on arbitrary equirect panoramas the predicted gain map is often subtle. Prefer **`G_real.pth`** for typical photos; raise **`peak`**, or increase **`preview_ev`**, if the result looks flat.
+**Why HDR can look almost unchanged:** GMNet was trained on a specific SDR/HDR pipeline; on arbitrary equirect panoramas the predicted gain map is often subtle. Prefer **`G_realworld.pth`** (or `G_real.pth` if that is what you have) for typical photos; raise **`peak`**, or increase **`preview_ev`**, if the result looks flat.
 
 ## 3) Configure and run local worker
 

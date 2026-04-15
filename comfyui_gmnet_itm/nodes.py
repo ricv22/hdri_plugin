@@ -14,8 +14,51 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
+
+
+def _resize_hwc(
+    img_hwc: np.ndarray,
+    out_h: int,
+    out_w: int,
+    *,
+    mode: str,
+) -> np.ndarray:
+    """HWC float32 resize via torch (avoids optional ``opencv-python``)."""
+    out_h = max(1, out_h)
+    out_w = max(1, out_w)
+    t = torch.from_numpy(np.ascontiguousarray(img_hwc, dtype=np.float32))
+    t = t.permute(2, 0, 1).unsqueeze(0)
+    kw: dict[str, Any] = {"size": (out_h, out_w), "mode": mode}
+    if mode in ("bilinear", "bicubic"):
+        kw["align_corners"] = False
+    y = F.interpolate(t, **kw)
+    return y.squeeze(0).permute(1, 2, 0).numpy()
+
+
+def _resize_hw1(
+    img: np.ndarray,
+    out_h: int,
+    out_w: int,
+    *,
+    mode: str,
+) -> np.ndarray:
+    """H×W or H×W×1 float32."""
+    out_h = max(1, out_h)
+    out_w = max(1, out_w)
+    if img.ndim == 2:
+        t = torch.from_numpy(np.ascontiguousarray(img, dtype=np.float32)).unsqueeze(0).unsqueeze(0)
+    else:
+        t = torch.from_numpy(np.ascontiguousarray(img, dtype=np.float32)).permute(2, 0, 1).unsqueeze(0)
+    kw: dict[str, Any] = {"size": (out_h, out_w), "mode": mode}
+    if mode in ("bilinear", "bicubic"):
+        kw["align_corners"] = False
+    y = F.interpolate(t, **kw)
+    if img.ndim == 2:
+        return y.squeeze(0).squeeze(0).numpy()
+    return y.squeeze(0).permute(1, 2, 0).numpy()
 
 _NET: torch.nn.Module | None = None
 _NET_KEY: str | None = None
@@ -42,20 +85,61 @@ def _default_checkpoint() -> str:
     root = os.environ.get("GMNET_REPO_ROOT", "").strip()
     if root:
         ckpt_dir = os.path.join(root, "checkpoints")
-        for name in ("G_real.pth", "G_synthetic.pth"):
+        for name in ("G_realworld.pth", "G_real.pth", "G_synthetic.pth"):
             cand = os.path.join(ckpt_dir, name)
             if os.path.isfile(cand):
                 return cand
     raise RuntimeError(
         "Set GMNET_CHECKPOINT to a .pth file, or set GMNET_REPO_ROOT to the GMNet repo root "
-        "containing checkpoints/G_real.pth or checkpoints/G_synthetic.pth"
+        "containing checkpoints/G_realworld.pth (or G_real.pth) or checkpoints/G_synthetic.pth"
     )
 
 
+def _inject_gmnet_utils_gpu_memory_shim(codes_root: str) -> None:
+    """
+    ComfyUI registers a different top-level ``utils``; GMNet's ``GMNet.py`` imports
+    ``from utils.gpu_memory_log import gpu_memory_log`` which is unused in ``forward``.
+
+    We **always** install a tiny stub for ``utils`` + ``utils.gpu_memory_log`` in
+    ``sys.modules`` (do not load the real ``gpu_memory_log.py`` — it needs ``pynvml``).
+    This avoids shadowing and importlib edge cases inside ComfyUI.
+    """
+    import types
+
+    codes_root = os.path.abspath(codes_root)
+    utils_dir = os.path.join(codes_root, "utils")
+    if not os.path.isdir(utils_dir):
+        raise RuntimeError(f"GMNet utils directory missing: {utils_dir}")
+
+    for key in list(sys.modules.keys()):
+        if key == "utils" or key.startswith("utils."):
+            try:
+                del sys.modules[key]
+            except KeyError:
+                pass
+
+    utils_pkg = types.ModuleType("utils")
+    utils_pkg.__path__ = [utils_dir]  # type: ignore[attr-defined]
+    sys.modules["utils"] = utils_pkg
+
+    gml = types.ModuleType("utils.gpu_memory_log")
+
+    def gpu_memory_log(*_a: Any, **_kw: Any) -> Any:
+        def _decorator(fn: Any) -> Any:
+            return fn
+
+        return _decorator
+
+    gml.gpu_memory_log = gpu_memory_log
+    sys.modules["utils.gpu_memory_log"] = gml
+
+
 def _ensure_gmnet_import_path() -> str:
-    codes = _gmnet_codes_root()
-    if codes not in sys.path:
-        sys.path.insert(0, codes)
+    codes = os.path.abspath(_gmnet_codes_root())
+    while codes in sys.path:
+        sys.path.remove(codes)
+    sys.path.insert(0, codes)
+    _inject_gmnet_utils_gpu_memory_shim(codes)
     return codes
 
 
@@ -66,6 +150,8 @@ def _load_net(ckpt: str, device: torch.device) -> torch.nn.Module:
         return _NET
 
     _ensure_gmnet_import_path()
+    # Failed prior import can leave a broken GMNet module cached.
+    sys.modules.pop("models.modules.GMNet", None)
     import models.networks as networks  # type: ignore  # noqa: E402
 
     opt: dict[str, Any] = {
@@ -119,8 +205,6 @@ def _preprocess_from_comfy_rgb(
     LQ at 1/scale of full res; MN is 256x256 from full-res SDR (GMNet dataset convention).
     org is full-res gamma 2.2 for the HDR merge in test.py.
     """
-    import cv2
-
     if rgb_hwc.dtype != np.float32:
         rgb_hwc = rgb_hwc.astype(np.float32)
     rgb_hwc = np.clip(rgb_hwc, 0.0, 1.0)
@@ -128,16 +212,14 @@ def _preprocess_from_comfy_rgb(
     h, w = bgr_full.shape[:2]
 
     if abs(scale - 1.0) > 1e-6:
-        bgr_lq = cv2.resize(
-            bgr_full,
-            (max(1, int(w / scale)), max(1, int(h / scale))),
-            interpolation=cv2.INTER_CUBIC,
-        )
+        new_w = max(1, int(w / scale))
+        new_h = max(1, int(h / scale))
+        bgr_lq = _resize_hwc(bgr_full, new_h, new_w, mode="bicubic")
     else:
         bgr_lq = bgr_full
     bgr_lq = np.clip(bgr_lq, 0.0, 1.0)
 
-    mn_bgr = cv2.resize(bgr_full, (256, 256), interpolation=cv2.INTER_CUBIC)
+    mn_bgr = _resize_hwc(bgr_full, 256, 256, mode="bicubic")
     mn_bgr = np.clip(mn_bgr, 0.0, 1.0)
 
     lq_rgb = bgr_lq[:, :, ::-1]
@@ -154,15 +236,16 @@ def _preprocess_from_comfy_rgb(
 
 def _hdr_bgr_from_qgm(lq_bgr_hwc: np.ndarray, qgm_hw1: np.ndarray, *, peak: float, scale: float) -> np.ndarray:
     """GMNet ``test.py`` merge: upscale QGM by ``scale`` to match full-res ``org``."""
-    import cv2
-
     sr = qgm_hw1
     if sr.ndim == 2:
         sr = sr[..., np.newaxis]
     h0, w0 = lq_bgr_hwc.shape[:2]
-    sr = cv2.resize(sr, None, None, fx=float(scale), fy=float(scale), interpolation=cv2.INTER_LINEAR)
+    h1, w1 = sr.shape[:2]
+    new_h = max(1, int(round(h1 * float(scale))))
+    new_w = max(1, int(round(w1 * float(scale))))
+    sr = _resize_hw1(sr, new_h, new_w, mode="bilinear")
     if sr.shape[0] != h0 or sr.shape[1] != w0:
-        sr = cv2.resize(sr, (w0, h0), interpolation=cv2.INTER_LINEAR)
+        sr = _resize_hw1(sr, h0, w0, mode="bilinear")
     if sr.ndim == 2:
         sr = sr[..., np.newaxis]
     exp = np.power(2.0, np.clip(sr, 0.0, 1.0) * np.log2(peak)) / peak
@@ -206,6 +289,8 @@ class GMNetHDRITM:
                     "FLOAT",
                     {"default": 1.0, "min": 0.25, "max": 1.0, "step": 0.25, "tooltip": "Downsample factor for LQ branch (1 = full resolution)"},
                 ),
+            },
+            "optional": {
                 "preview_ev": (
                     "FLOAT",
                     {
@@ -216,8 +301,6 @@ class GMNetHDRITM:
                         "tooltip": "Multiply linear HDR by 2^EV before LDR encoding. Use +0.5–1.5 if highlights look unchanged (PNG/hdr brightness).",
                     },
                 ),
-            },
-            "optional": {
                 "checkpoint_path": (
                     "STRING",
                     {"default": "", "tooltip": "Path to G_synthetic.pth; empty = GMNET_CHECKPOINT / GMNET_REPO_ROOT"},
@@ -234,12 +317,15 @@ class GMNetHDRITM:
         images: torch.Tensor,
         peak: float,
         scale: float,
-        preview_ev: float,
+        preview_ev: float = 0.0,
         checkpoint_path: str = "",
     ) -> tuple[torch.Tensor]:
         ckpt = checkpoint_path.strip() if checkpoint_path else ""
         if not ckpt:
             ckpt = _default_checkpoint()
+
+        if preview_ev is None:
+            preview_ev = 0.0
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         net = _load_net(ckpt, device)
