@@ -1,0 +1,40 @@
+{
+  "1": {
+    "inputs": {
+      "image": "__INPUT_IMAGE_NAME__"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Equirectangular input (from worker upload)"
+    }
+  },
+  "2": {
+    "inputs": {
+      "peak": 8,
+      "scale": 1,
+      "preview_ev": 0.5,
+      "checkpoint_path": "D:/gmnet/GMNet/checkpoints/G_realworld.pth",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "GMNetHDRITM",
+    "_meta": {
+      "title": "GMNet gain-map HDR (inverse tone map)"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "GMNet_HDR",
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

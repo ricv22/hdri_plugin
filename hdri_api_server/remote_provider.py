@@ -41,6 +41,14 @@ class RemoteProvider:
         return os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower()
 
     @staticmethod
+    def _runcomfy_http_timeout_s() -> float:
+        """Socket timeout per HTTP call to RunComfy (inference POST, poll, result, image download)."""
+        try:
+            return max(30.0, float(os.environ.get("RUNCOMFY_HTTP_TIMEOUT_S", "120")))
+        except ValueError:
+            return 120.0
+
+    @staticmethod
     def _http_json(url: str, method: str, payload: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=body, method=method)
@@ -49,7 +57,8 @@ class RemoteProvider:
         for k, v in (headers or {}).items():
             if v:
                 req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        timeout = RemoteProvider._runcomfy_http_timeout_s()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     @staticmethod
@@ -58,7 +67,8 @@ class RemoteProvider:
         for k, v in (headers or {}).items():
             if v:
                 req.add_header(k, v)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        timeout = RemoteProvider._runcomfy_http_timeout_s()
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
 
     def _runcomfy_headers(self) -> dict[str, str]:
@@ -103,6 +113,65 @@ class RemoteProvider:
         if quality_mode == "high":
             return int(os.environ.get("RUNCOMFY_HIGH_STEPS", "32"))
         return int(os.environ.get("RUNCOMFY_BALANCED_STEPS", "24"))
+
+    @staticmethod
+    def _runcomfy_coverage_to_fov_deg(reference_coverage: float) -> float:
+        """Match examples/comfyui_worker.py tuning (coverage → sticker FOV)."""
+        fov = float(reference_coverage) * 212.5
+        return max(35.0, min(140.0, fov))
+
+    @staticmethod
+    def _build_runcomfy_panorama_stickers_state_json(
+        *,
+        image_data_uri: str,
+        width: int,
+        reference_coverage: float,
+        bg_color: str,
+    ) -> str:
+        """
+        Build PanoramaStickers `state_json` for RunComfy. RunComfy accepts media as
+        HTTPS URLs or data URIs in overrides; we pass the same data URI in `filename`
+        so the hosted ComfyUI graph can load the control image (see RunComfy quickstart).
+        """
+        asset_id = "asset_uploaded"
+        sticker_id = "st_uploaded"
+        fov_deg = RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
+        state: dict[str, Any] = {
+            "version": 1,
+            "projection_model": "pinhole_rectilinear",
+            "alpha_mode": "straight",
+            "bg_color": bg_color,
+            "output_preset": int(width),
+            "assets": {
+                asset_id: {
+                    "type": "comfy_image",
+                    "filename": image_data_uri,
+                    "subfolder": "",
+                    "storage": "input",
+                    "name": "upload",
+                }
+            },
+            "stickers": [
+                {
+                    "id": sticker_id,
+                    "asset_id": asset_id,
+                    "yaw_deg": 0.0,
+                    "pitch_deg": 0.0,
+                    "hFOV_deg": fov_deg,
+                    "vFOV_deg": fov_deg,
+                    "rot_deg": 0.0,
+                    "z_index": 1,
+                }
+            ],
+            "shots": [],
+            "ui_settings": {
+                "invert_view_x": False,
+                "invert_view_y": False,
+                "preview_quality": "balanced",
+            },
+            "active": {"selected_sticker_id": sticker_id, "selected_shot_id": None},
+        }
+        return json.dumps(state, separators=(",", ":"))
 
     def _build_runcomfy_overrides(
         self,
@@ -175,6 +244,31 @@ class RemoteProvider:
 
         for node_id in self._parse_node_ids("RUNCOMFY_STEPS_NODE_IDS"):
             self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STEPS_INPUT_NAME", "steps"), self._quality_steps(quality_mode))
+
+        # PanoramaStickers (e.g. examples/comfyui_flux2_klein_4b_api.json node 56): image lives in
+        # `state_json`, not LoadImage. RunComfy: media as data URI in asset filename (see docs).
+        ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
+        if ps_ids:
+            ref = generic.get("reference_coverage")
+            if ref is None:
+                try:
+                    ref_cov = float(os.environ.get("RUNCOMFY_DEFAULT_REFERENCE_COVERAGE", "0.4"))
+                except ValueError:
+                    ref_cov = 0.4
+            else:
+                ref_cov = float(ref)
+            bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
+            state_str = self._build_runcomfy_panorama_stickers_state_json(
+                image_data_uri=data_uri,
+                width=width,
+                reference_coverage=ref_cov,
+                bg_color=bg,
+            )
+            preset = f"{width} x {height}"
+            for node_id in ps_ids:
+                self._set_override_value(out, node_id, "output_preset", preset)
+                self._set_override_value(out, node_id, "bg_color", bg)
+                self._set_override_value(out, node_id, "state_json", state_str)
 
         return out
 

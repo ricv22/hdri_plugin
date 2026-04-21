@@ -559,6 +559,13 @@ def _start_stale_job_reaper() -> None:
 _start_stale_job_reaper()
 
 
+def _config_panorama_mode() -> str:
+    """Value exposed on /v1/config (Blender add-on rejects resize-only servers for real panoramas)."""
+    if os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower() == "runcomfy":
+        return "runcomfy"
+    return get_mode()
+
+
 @app.get("/v1/config")
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
@@ -566,11 +573,12 @@ def config():
     if hdr_default not in {"heuristic", "ai_fast", "comfyui_hdr", "off"}:
         hdr_default = "ai_fast"
     return {
-        "panorama_mode": get_mode(),
+        "panorama_mode": _config_panorama_mode(),
         "hdr_reconstruction_default": hdr_default,
         "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
         "hdr_http_url": os.environ.get("HDR_HTTP_URL", ""),
-        "note": "Set PANORAMA_MODE=replicate | http_json | hf_dit360; see README.",
+        "remote_provider": os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower(),
+        "note": "Panorama: PANORAMA_MODE or HDRI_REMOTE_PROVIDER=runcomfy; see README.",
     }
 
 

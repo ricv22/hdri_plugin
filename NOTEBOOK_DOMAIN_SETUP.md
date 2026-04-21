@@ -26,9 +26,54 @@ Follow these steps in order so nothing depends on a missing piece.
 | **G** | **Verify HTTPS** | Wait for DNS (often 30 min - few hours). Test `https://api.richardandrys.com/v1/config` in a browser. | Proves domain + tunnel + API. |
 | **H** | **API keys + Blender** | Create a user key (`POST /v1/accounts` with `X-Admin-Token`, or bootstrap key in `.env` for dev). In the add-on: Base URL `https://api.richardandrys.com`, paste key. | End-to-end from Blender. |
 
-**Note:** If your domainís **nameservers** point to **Cloudflare** (not WEDOS), add the `api` **CNAME in Cloudflare DNS** instead of WEDOS. Only one DNS provider is authoritative.
+**Note:** If your domain's **nameservers** point to **Cloudflare** (not WEDOS), add the `api` **CNAME in Cloudflare DNS** instead of WEDOS. Only one DNS provider is authoritative.
+
+### WEDOS nameservers + Cloudflare Tunnel (what to set in Cloudflare)
+
+You **keep nameservers at WEDOS**. You **do not** need to add `richardandrys.com` under Cloudflare **Websites** for the tunnel to work. Use **Cloudflare Zero Trust** for the tunnel only.
+
+1. Open **[Cloudflare Zero Trust](https://one.dash.cloudflare.com)** (same account as `cloudflared tunnel login`).
+2. **Networks** -> **Tunnels** -> your tunnel -> **Configure**.
+3. Add a **hostname route** for the API (UI labels vary by account):
+   - Choose **public hostname** (traffic from the Internet through the tunnel to your laptop). **Do not** pick **private hostname** for this use case: that path is for resources on a private network and often mentions **Cloudflare Gateway** and the **Cloudflare One** / WARP client for *users*. Your Blender users must **not** install WARP; they only call `https://api.richardandrys.com` like normal HTTPS.
+   - **Hostname:** `api.richardandrys.com`
+   - **Service / origin:** `http://127.0.0.1:8000` (path empty unless you need a prefix).
+   - Older UI: **Public hostnames** -> subdomain `api`, domain `richardandrys.com`, service `http://127.0.0.1:8000`.
+   - **Published application routes** is usually **Cloudflare Access** (extra login). Skip for a Bearer-token API unless you want that login page.
+4. Save. Cloudflare shows **DNS** instructions for **external** DNS: a **CNAME** for `api` pointing to `*.cfargotunnel.com` (copy exactly).
+5. In **WEDOS** -> DNS for `richardandrys.com`, add that **CNAME** (name `api`, target = hostname from step 4). Apply changes.
+6. On the notebook, keep both running: `uvicorn` on `:8000` and `cloudflared tunnel run <name>`.
+7. After DNS propagates, test: `https://api.richardandrys.com/v1/config`
+
+HTTPS for `api.richardandrys.com` is issued at the **tunnel edge**; you do not turn on SSL in a separate Cloudflare "website" zone unless you also move the domain there.
 
 Official Cloudflare Tunnel docs: [Cloudflare Zero Trust - Tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
+
+### Troubleshooting: tunnel runs but only `http_status:404`
+
+If `cloudflared tunnel run` logs something like:
+
+`Updated to new configuration config="{\"ingress\":[{\"service\":\"http_status:404\"}]...`
+
+then **no hostname is routed to uvicorn** yet. DNS can be correct and the tunnel still returns 404 until you add ingress.
+
+**Fix A (recommended when remote config is used):** Zero Trust -> **Networks** -> **Tunnels** -> **hdri-api** -> **Configure** -> add **Public hostname** (or **Hostname route**, public): `api.richardandrys.com` -> `http://127.0.0.1:8000`. Save. Restart `cloudflared` and confirm the log shows an `ingress` entry for that hostname (not only 404).
+
+**Fix B (local `config.yml`):** Create `~/.cloudflared/config.yml` (use your tunnel UUID from `cloudflared tunnel list` and your credentials path):
+
+```yaml
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /home/YOU/.cloudflared/YOUR_TUNNEL_UUID.json
+
+ingress:
+  - hostname: api.richardandrys.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
+```
+
+If Cloudflare still pushes a remote config that overrides this, use Fix A or align the dashboard with the same routes.
+
+ICMP / UDP buffer warnings in the log are usually **non-fatal** for HTTP.
 
 ## 1. Environment (copy into `hdri_api_server/.env`)
 
@@ -110,7 +155,7 @@ You need a DNS record so the name **`api.richardandrys.com`** resolves to your t
 
 - Log in to **WEDOS customer administration** (https://client.wedos.com or the current WEDOS client URL).
 - Open **Domains** and select **`richardandrys.com`**.
-- Open **DNS records** / **DNS management** for that domain (wording may be "Sprùva DNS", "DNS zùznamy", or similar).
+- Open **DNS records** / **DNS management** for that domain.
 
 ### What to add (notebook + tunnel)
 
