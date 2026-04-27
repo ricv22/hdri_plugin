@@ -264,7 +264,9 @@ class RemoteProvider:
                 reference_coverage=ref_cov,
                 bg_color=bg,
             )
-            preset = f"{width} x {height}"
+            # RunComfy's PanoramaStickers node expects the preset combo value
+            # ("1024", "2048", "4096"), not a "width x height" label.
+            preset = str(width)
             for node_id in ps_ids:
                 self._set_override_value(out, node_id, "output_preset", preset)
                 self._set_override_value(out, node_id, "bg_color", bg)
