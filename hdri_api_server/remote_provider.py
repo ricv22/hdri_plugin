@@ -15,6 +15,14 @@ from PIL import Image
 from panorama import build_equirectangular
 
 
+class RunComfyHTTPError(RuntimeError):
+    def __init__(self, status_code: int, url: str, body: str):
+        self.status_code = status_code
+        self.url = url
+        self.body = body
+        super().__init__(f"HTTP {status_code} from {url}: {body[:2000]}")
+
+
 @dataclass
 class ProviderSubmitResult:
     provider_job_id: str
@@ -65,7 +73,7 @@ class RemoteProvider:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {e.code} from {url}: {body[:2000]}") from e
+            raise RunComfyHTTPError(e.code, url, body) from e
 
     @staticmethod
     def _http_download_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
@@ -381,8 +389,15 @@ class RemoteProvider:
             status_url = f"{base}/prod/v1/deployments/{deployment_id}/requests/{request_id}/status"
             result_url = f"{base}/prod/v1/deployments/{deployment_id}/requests/{request_id}/result"
             deadline = time.time() + float(os.environ.get("RUNCOMFY_POLL_TIMEOUT_S", "900"))
+            transient_statuses = {429, 502, 503, 504}
             while time.time() < deadline:
-                status_data = self._http_json(status_url, "GET", headers=self._runcomfy_headers())
+                try:
+                    status_data = self._http_json(status_url, "GET", headers=self._runcomfy_headers())
+                except RunComfyHTTPError as e:
+                    if e.status_code not in transient_statuses:
+                        raise
+                    time.sleep(max(1.0, float(poll_interval_s)))
+                    continue
                 status = str(status_data.get("status", "")).strip().lower()
                 if status in {"in_queue", "queued", "in_progress", "running", "processing"}:
                     time.sleep(max(0.2, float(poll_interval_s)))
@@ -396,7 +411,16 @@ class RemoteProvider:
             else:
                 raise RuntimeError(f"RunComfy polling timed out for request_id={request_id}")
 
-            result_data = self._http_json(result_url, "GET", headers=self._runcomfy_headers())
+            while time.time() < deadline:
+                try:
+                    result_data = self._http_json(result_url, "GET", headers=self._runcomfy_headers())
+                    break
+                except RunComfyHTTPError as e:
+                    if e.status_code not in transient_statuses:
+                        raise
+                    time.sleep(max(1.0, float(poll_interval_s)))
+            else:
+                raise RuntimeError(f"RunComfy result fetch timed out for request_id={request_id}")
             if str(result_data.get("status", "")).strip().lower() in {"failed", "error"}:
                 raise RuntimeError(f"RunComfy result failed: {result_data}")
 
