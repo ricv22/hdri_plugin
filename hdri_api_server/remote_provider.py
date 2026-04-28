@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -90,8 +91,18 @@ class RemoteProvider:
     def _image_data_uri(image_b64: str) -> str:
         raw = image_b64.strip()
         if raw.startswith("data:image/"):
-            return raw
-        return f"data:image/jpeg;base64,{raw}"
+            _, _, raw = raw.partition(",")
+        try:
+            image_bytes = base64.b64decode(raw, validate=False)
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image.thumbnail((1536, 1536), resample=Image.LANCZOS)
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=85, optimize=True)
+            encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{encoded}"
+        except Exception:
+            # Fall back to the original data if Pillow cannot decode it.
+            return f"data:image/jpeg;base64,{raw}"
 
     @staticmethod
     def _parse_node_ids(env_name: str) -> list[str]:
