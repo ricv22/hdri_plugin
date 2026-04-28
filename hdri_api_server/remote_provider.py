@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
+import urllib.error
 import urllib.request
 
 from PIL import Image
@@ -59,8 +60,12 @@ class RemoteProvider:
             if v:
                 req.add_header(k, v)
         timeout = RemoteProvider._runcomfy_http_timeout_s()
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {e.code} from {url}: {body[:2000]}") from e
 
     @staticmethod
     def _http_download_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
