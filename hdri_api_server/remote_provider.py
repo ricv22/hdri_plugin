@@ -81,7 +81,11 @@ class RemoteProvider:
         token = os.environ.get("RUNCOMFY_API_TOKEN", "").strip()
         if not token:
             raise RuntimeError("RUNCOMFY_API_TOKEN is required when HDRI_REMOTE_PROVIDER=runcomfy")
-        return {"Authorization": f"Bearer {token}"}
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "curl/8.5.0",
+        }
 
     def _runcomfy_base(self) -> str:
         return os.environ.get("RUNCOMFY_BASE_URL", "https://api.runcomfy.net").rstrip("/")
