@@ -21,6 +21,7 @@ def main() -> int:
         image_b64=_tiny_png_b64(),
         width=2048,
         height=1024,
+        scene_mode="auto",
         quality_mode="balanced",
         overrides={
             "prompt": "sunset over mountains",

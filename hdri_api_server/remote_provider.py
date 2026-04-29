@@ -155,6 +155,74 @@ class RemoteProvider:
         return f"{public_base}/v1/input-files/{file_id}.jpg?exp={exp}&sig={sig}"
 
     @staticmethod
+    def _build_erp_control_png(
+        image_b64: str,
+        *,
+        width: int,
+        height: int,
+        scene_mode: str,
+        reference_coverage: float,
+    ) -> bytes | None:
+        try:
+            try:
+                from examples.erp_layout import build_single_front_erp_layout  # type: ignore
+            except Exception:
+                from erp_layout import build_single_front_erp_layout  # type: ignore
+            raw = image_b64.strip()
+            if raw.startswith("data:image/"):
+                _, _, raw = raw.partition(",")
+            image_bytes = base64.b64decode(raw, validate=False)
+            src = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            layout = build_single_front_erp_layout(
+                source_rgb=src,
+                canvas_width=int(width),
+                canvas_height=int(height),
+                scene_mode=scene_mode,
+                reference_coverage=float(reference_coverage),
+            )
+            buf = io.BytesIO()
+            layout.control_rgb.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _signed_erp_control_url(
+        image_b64: str,
+        *,
+        width: int,
+        height: int,
+        scene_mode: str,
+        reference_coverage: float,
+    ) -> str | None:
+        if os.environ.get("RUNCOMFY_INPUT_IMAGE_TRANSPORT", "url").strip().lower() != "url":
+            return None
+        public_base = os.environ.get("HDRI_PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if not public_base:
+            return None
+        png_bytes = RemoteProvider._build_erp_control_png(
+            image_b64,
+            width=width,
+            height=height,
+            scene_mode=scene_mode,
+            reference_coverage=reference_coverage,
+        )
+        if png_bytes is None:
+            return None
+        data_dir = os.environ.get("HDRI_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+        os.makedirs(data_dir, exist_ok=True)
+        file_id = f"runcomfy_erp_{uuid.uuid4()}"
+        disk_path = os.path.join(data_dir, f"{file_id}.png")
+        with open(disk_path, "wb") as f:
+            f.write(png_bytes)
+        ttl = int(os.environ.get("RUNCOMFY_INPUT_URL_TTL_S", os.environ.get("HDRI_SIGNED_URL_TTL_S", "3600")))
+        exp = int(time.time()) + ttl
+        secret = os.environ.get("HDRI_SIGNING_SECRET", "dev-secret-change-me").encode("utf-8")
+        msg = f"{file_id}:{exp}".encode("utf-8")
+        sig = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+        return f"{public_base}/v1/input-files/{file_id}.png?exp={exp}&sig={sig}"
+
+    @staticmethod
     def _parse_node_ids(env_name: str) -> list[str]:
         raw = os.environ.get(env_name, "").strip()
         if not raw:
@@ -240,6 +308,7 @@ class RemoteProvider:
         image_b64: str,
         width: int,
         height: int,
+        scene_mode: str,
         quality_mode: str,
         overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -264,10 +333,34 @@ class RemoteProvider:
                 return out
 
         generic = overrides or {}
-        image_ref = self._signed_input_image_url(image_b64) or self._image_data_uri(image_b64)
+        ref_cov_val = generic.get("reference_coverage")
+        if ref_cov_val is None:
+            try:
+                ref_cov = float(os.environ.get("RUNCOMFY_DEFAULT_REFERENCE_COVERAGE", "0.4"))
+            except ValueError:
+                ref_cov = 0.4
+        else:
+            ref_cov = float(ref_cov_val)
 
-        # Image nodes (LoadImage.image)
-        for node_id in self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS"):
+        load_image_node_ids = self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS")
+        # For the panorama outpainting workflow, the LoadImage node receives a
+        # pre-composited 2:1 ERP control PNG (green outpaint area + source
+        # placed front-center). This avoids depending on PanoramaStickers which
+        # only loads images from the deployment's local input/ directory.
+        compose_erp = os.environ.get("RUNCOMFY_LOAD_IMAGE_COMPOSE_ERP", "1").strip().lower() in {"1", "true", "yes", "on"}
+        image_ref: str | None = None
+        if load_image_node_ids and compose_erp:
+            image_ref = self._signed_erp_control_url(
+                image_b64,
+                width=width,
+                height=height,
+                scene_mode=scene_mode,
+                reference_coverage=ref_cov,
+            )
+        if image_ref is None:
+            image_ref = self._signed_input_image_url(image_b64) or self._image_data_uri(image_b64)
+
+        for node_id in load_image_node_ids:
             self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_IMAGE_INPUT_NAME", "image"), image_ref)
 
         # Prompt nodes
@@ -307,17 +400,11 @@ class RemoteProvider:
             self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STEPS_INPUT_NAME", "steps"), self._quality_steps(quality_mode))
 
         # PanoramaStickers (e.g. examples/comfyui_flux2_klein_4b_api.json node 56): image lives in
-        # `state_json`, not LoadImage. RunComfy: media as data URI in asset filename (see docs).
+        # `state_json`, not LoadImage. NOTE: PanoramaStickers' asset resolver only reads images from
+        # the deployment's local input/ directory; it cannot fetch HTTPS URLs or data URIs. Prefer
+        # the LoadImage + ERP-composition path above; this branch is kept for backwards compat.
         ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
         if ps_ids:
-            ref = generic.get("reference_coverage")
-            if ref is None:
-                try:
-                    ref_cov = float(os.environ.get("RUNCOMFY_DEFAULT_REFERENCE_COVERAGE", "0.4"))
-                except ValueError:
-                    ref_cov = 0.4
-            else:
-                ref_cov = float(ref)
             bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
             state_str = self._build_runcomfy_panorama_stickers_state_json(
                 image_data_uri=image_ref,
@@ -341,6 +428,7 @@ class RemoteProvider:
         image_b64: str,
         width: int,
         height: int,
+        scene_mode: str,
         quality_mode: str,
         overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -353,6 +441,7 @@ class RemoteProvider:
             image_b64=image_b64,
             width=width,
             height=height,
+            scene_mode=scene_mode,
             quality_mode=quality_mode,
             overrides=overrides,
         )
@@ -373,7 +462,6 @@ class RemoteProvider:
         quality_mode: str,
         overrides: dict[str, Any] | None = None,
     ) -> ProviderSubmitResult:
-        _ = scene_mode
         mode = self._provider_mode()
         if mode == "runcomfy":
             base = self._runcomfy_base()
@@ -383,6 +471,7 @@ class RemoteProvider:
                 image_b64=image_b64,
                 width=width,
                 height=height,
+                scene_mode=scene_mode,
                 quality_mode=quality_mode,
                 overrides=overrides,
             )
