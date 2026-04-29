@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -105,21 +107,52 @@ class RemoteProvider:
         return deployment_id
 
     @staticmethod
-    def _image_data_uri(image_b64: str) -> str:
+    def _normalise_image_bytes(image_b64: str) -> bytes:
         raw = image_b64.strip()
         if raw.startswith("data:image/"):
             _, _, raw = raw.partition(",")
+        image_bytes = base64.b64decode(raw, validate=False)
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image.thumbnail((1536, 1536), resample=Image.LANCZOS)
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue()
+
+    @staticmethod
+    def _image_data_uri(image_b64: str) -> str:
         try:
-            image_bytes = base64.b64decode(raw, validate=False)
-            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            image.thumbnail((1536, 1536), resample=Image.LANCZOS)
-            buf = io.BytesIO()
-            image.save(buf, format="JPEG", quality=85, optimize=True)
-            encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+            encoded = base64.b64encode(RemoteProvider._normalise_image_bytes(image_b64)).decode("ascii")
             return f"data:image/jpeg;base64,{encoded}"
         except Exception:
             # Fall back to the original data if Pillow cannot decode it.
+            raw = image_b64.strip()
+            if raw.startswith("data:image/"):
+                return raw
             return f"data:image/jpeg;base64,{raw}"
+
+    @staticmethod
+    def _signed_input_image_url(image_b64: str) -> str | None:
+        if os.environ.get("RUNCOMFY_INPUT_IMAGE_TRANSPORT", "url").strip().lower() != "url":
+            return None
+        public_base = os.environ.get("HDRI_PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if not public_base:
+            return None
+        try:
+            image_bytes = RemoteProvider._normalise_image_bytes(image_b64)
+        except Exception:
+            return None
+        data_dir = os.environ.get("HDRI_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+        os.makedirs(data_dir, exist_ok=True)
+        file_id = f"runcomfy_input_{uuid.uuid4()}"
+        disk_path = os.path.join(data_dir, f"{file_id}.jpg")
+        with open(disk_path, "wb") as f:
+            f.write(image_bytes)
+        ttl = int(os.environ.get("RUNCOMFY_INPUT_URL_TTL_S", os.environ.get("HDRI_SIGNED_URL_TTL_S", "3600")))
+        exp = int(time.time()) + ttl
+        secret = os.environ.get("HDRI_SIGNING_SECRET", "dev-secret-change-me").encode("utf-8")
+        msg = f"{file_id}:{exp}".encode("utf-8")
+        sig = hmac.new(secret, msg, hashlib.sha256).hexdigest()
+        return f"{public_base}/v1/input-files/{file_id}.jpg?exp={exp}&sig={sig}"
 
     @staticmethod
     def _parse_node_ids(env_name: str) -> list[str]:
@@ -231,11 +264,11 @@ class RemoteProvider:
                 return out
 
         generic = overrides or {}
-        data_uri = self._image_data_uri(image_b64)
+        image_ref = self._signed_input_image_url(image_b64) or self._image_data_uri(image_b64)
 
         # Image nodes (LoadImage.image)
         for node_id in self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS"):
-            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_IMAGE_INPUT_NAME", "image"), data_uri)
+            self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_IMAGE_INPUT_NAME", "image"), image_ref)
 
         # Prompt nodes
         prompt = generic.get("prompt")
@@ -287,7 +320,7 @@ class RemoteProvider:
                 ref_cov = float(ref)
             bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
             state_str = self._build_runcomfy_panorama_stickers_state_json(
-                image_data_uri=data_uri,
+                image_data_uri=image_ref,
                 width=width,
                 reference_coverage=ref_cov,
                 bg_color=bg,

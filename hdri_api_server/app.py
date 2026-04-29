@@ -747,3 +747,27 @@ def get_file(file_name: str, exp: int, sig: str):
         media = "image/x-exr"
 
     return FileResponse(disk_path, media_type=media, filename=file_name)
+
+
+@app.get("/v1/input-files/{file_name}")
+def get_input_file(file_name: str, exp: int, sig: str):
+    if not (file_name.endswith(".jpg") or file_name.endswith(".jpeg") or file_name.endswith(".png") or file_name.endswith(".webp")):
+        raise HTTPException(status_code=400, detail="Only .jpg, .jpeg, .png, or .webp is supported.")
+
+    ext = os.path.splitext(file_name)[1]
+    file_id = os.path.splitext(file_name)[0]
+
+    if not _verify(file_id, exp, sig):
+        raise HTTPException(status_code=403, detail="Invalid or expired URL.")
+
+    disk_path = os.path.join(DATA_DIR, f"{file_id}{ext}")
+    if not os.path.exists(disk_path):
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    media = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }.get(ext.lower(), "application/octet-stream")
+    return FileResponse(disk_path, media_type=media, filename=file_name)
