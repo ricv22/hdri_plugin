@@ -217,23 +217,49 @@ class RemoteProvider:
     ) -> bytes | None:
         try:
             try:
-                from examples.erp_layout import build_single_front_erp_layout  # type: ignore
+                from erp_projection import coverage_to_fov_deg, project_pinhole_to_erp
             except Exception:
-                from erp_layout import build_single_front_erp_layout  # type: ignore
+                from .erp_projection import coverage_to_fov_deg, project_pinhole_to_erp  # type: ignore
             raw = image_b64.strip()
             if raw.startswith("data:image/"):
                 _, _, raw = raw.partition(",")
             image_bytes = base64.b64decode(raw, validate=False)
             src = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            layout = build_single_front_erp_layout(
-                source_rgb=src,
+
+            fov_deg = coverage_to_fov_deg(reference_coverage)
+            mode = (scene_mode or "auto").strip().lower()
+            pitch_deg = 5.0 if mode == "outdoor" else 0.0
+
+            try:
+                custom_fov = float(os.environ.get("RUNCOMFY_ERP_HFOV_DEG", "").strip())
+            except ValueError:
+                custom_fov = 0.0
+            if custom_fov > 0.0:
+                fov_deg = custom_fov
+
+            try:
+                pitch_override = os.environ.get("RUNCOMFY_ERP_PITCH_DEG", "").strip()
+                if pitch_override != "":
+                    pitch_deg = float(pitch_override)
+            except ValueError:
+                pass
+
+            bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
+
+            erp = project_pinhole_to_erp(
+                src,
                 canvas_width=int(width),
                 canvas_height=int(height),
-                scene_mode=scene_mode,
-                reference_coverage=float(reference_coverage),
+                yaw_deg=0.0,
+                pitch_deg=pitch_deg,
+                h_fov_deg=fov_deg,
+                v_fov_deg=fov_deg,
+                rot_deg=0.0,
+                bg_color=bg,
             )
+
             buf = io.BytesIO()
-            layout.control_rgb.save(buf, format="PNG")
+            erp.save(buf, format="PNG")
             return buf.getvalue()
         except Exception:
             return None
