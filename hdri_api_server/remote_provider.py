@@ -78,14 +78,66 @@ class RemoteProvider:
             raise RunComfyHTTPError(e.code, url, body) from e
 
     @staticmethod
+    def _download_headers() -> dict[str, str]:
+        """Headers for fetching binary files from RunComfy temp storage (not JSON API)."""
+        return {
+            "Accept": "image/*,*/*;q=0.8",
+            "User-Agent": "curl/8.5.0",
+        }
+
+    @staticmethod
     def _http_download_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
         req = urllib.request.Request(url, method="GET")
-        for k, v in (headers or {}).items():
+        merged = RemoteProvider._download_headers()
+        merged.update(headers or {})
+        for k, v in merged.items():
             if v:
                 req.add_header(k, v)
         timeout = RemoteProvider._runcomfy_http_timeout_s()
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {e.code} downloading {url}: {body[:500]}") from e
+
+    @staticmethod
+    def _collect_https_urls(obj: Any) -> list[str]:
+        found: list[str] = []
+
+        def walk(x: Any) -> None:
+            if isinstance(x, dict):
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+            elif isinstance(x, str) and x.startswith("https://"):
+                found.append(x)
+
+        walk(obj)
+        return found
+
+    @staticmethod
+    def _pick_runcomfy_output_image_url(urls: list[str]) -> str | None:
+        if not urls:
+            return None
+        uniq = list(dict.fromkeys(urls))
+
+        prefs_raw = os.environ.get(
+            "RUNCOMFY_OUTPUT_URL_CONTAINS",
+            "serverless-api-storage.runcomfy.net,temp/,ComfyUI_temp",
+        )
+        prefs = [p.strip() for p in prefs_raw.split(",") if p.strip()]
+
+        def score(u: str) -> tuple[int, int]:
+            s = sum(1 for p in prefs if p in u)
+            ext = u.lower().rpartition(".")[2]
+            ext_bonus = 2 if ext in {"png", "webp", "jpg", "jpeg"} else 0
+            return (s + ext_bonus, len(u))
+
+        ranked = sorted(uniq, key=score, reverse=True)
+        return ranked[0]
 
     def _runcomfy_headers(self) -> dict[str, str]:
         token = os.environ.get("RUNCOMFY_API_TOKEN", "").strip()
@@ -556,12 +608,15 @@ class RemoteProvider:
                     if isinstance(images, list):
                         for img in images:
                             if isinstance(img, dict):
-                                url = img.get("url")
-                                if isinstance(url, str) and url.startswith("http"):
+                                url = img.get("url") or img.get("URL")
+                                if isinstance(url, str) and url.startswith(("http://", "https://")):
                                     image_url = url
                                     break
                         if image_url:
                             break
+            if not image_url:
+                candidates = RemoteProvider._collect_https_urls(result_data)
+                image_url = RemoteProvider._pick_runcomfy_output_image_url(candidates)
             if not image_url:
                 raise RuntimeError(f"RunComfy result missing output image URL: {result_data}")
             raw = self._http_download_bytes(image_url)
