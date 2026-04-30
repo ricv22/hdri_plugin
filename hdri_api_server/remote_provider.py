@@ -126,7 +126,7 @@ class RemoteProvider:
 
         prefs_raw = os.environ.get(
             "RUNCOMFY_OUTPUT_URL_CONTAINS",
-            "serverless-api-storage.runcomfy.net,temp/,ComfyUI_temp",
+            "serverless-api-storage.runcomfy.net,deployment_requests,temp/,ComfyUI_temp",
         )
         prefs = [p.strip() for p in prefs_raw.split(",") if p.strip()]
 
@@ -138,6 +138,83 @@ class RemoteProvider:
 
         ranked = sorted(uniq, key=score, reverse=True)
         return ranked[0]
+
+    @staticmethod
+    def _select_runcomfy_image_url(result_data: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Select the panorama output image URL from a RunComfy /result payload.
+
+        Prefers nodes listed in ``RUNCOMFY_OUTPUT_NODE_IDS`` (comma-separated). If
+        unset, prefers any image with ``type=="output"`` (SaveImage), then ``type=="temp"``
+        (PreviewImage), and finally falls back to a recursive scan. Skips nodes listed
+        in ``RUNCOMFY_OUTPUT_SKIP_NODE_IDS`` (typically the LoadImage we inject).
+        Returns ``(url, source_node_id)``.
+        """
+        outputs = result_data.get("outputs") if isinstance(result_data, dict) else None
+        if not isinstance(outputs, dict):
+            return None, None
+
+        whitelist = [
+            x.strip()
+            for x in os.environ.get("RUNCOMFY_OUTPUT_NODE_IDS", "").split(",")
+            if x.strip()
+        ]
+        skip = {
+            x.strip()
+            for x in os.environ.get("RUNCOMFY_OUTPUT_SKIP_NODE_IDS", "").split(",")
+            if x.strip()
+        }
+        # Also implicitly skip the LoadImage node we injected (its preview is the input).
+        for node_id in os.environ.get("RUNCOMFY_IMAGE_NODE_IDS", "").split(","):
+            node_id = node_id.strip()
+            if node_id:
+                skip.add(node_id)
+
+        def _images_for(node_id: str) -> list[dict[str, Any]]:
+            node_val = outputs.get(node_id)
+            if not isinstance(node_val, dict):
+                return []
+            images = node_val.get("images")
+            return [img for img in (images or []) if isinstance(img, dict)]
+
+        def _first_url(images: list[dict[str, Any]]) -> str | None:
+            for img in images:
+                url = img.get("url") or img.get("URL")
+                if isinstance(url, str) and url.startswith(("http://", "https://")):
+                    return url
+            return None
+
+        # 1. Whitelist takes priority, in order.
+        for node_id in whitelist:
+            if node_id in skip:
+                continue
+            url = _first_url(_images_for(node_id))
+            if url:
+                return url, node_id
+
+        # 2. Otherwise prefer SaveImage outputs, then preview/temp.
+        for desired_type in ("output", "temp"):
+            for node_id, node_val in outputs.items():
+                if node_id in skip or not isinstance(node_val, dict):
+                    continue
+                imgs = node_val.get("images") or []
+                for img in imgs:
+                    if not isinstance(img, dict):
+                        continue
+                    if str(img.get("type", "")).strip().lower() != desired_type:
+                        continue
+                    url = img.get("url") or img.get("URL")
+                    if isinstance(url, str) and url.startswith(("http://", "https://")):
+                        return url, str(node_id)
+
+        # 3. Last resort: any URL on any non-skipped node.
+        for node_id, node_val in outputs.items():
+            if node_id in skip or not isinstance(node_val, dict):
+                continue
+            url = _first_url(node_val.get("images") or [])
+            if url:
+                return url, str(node_id)
+
+        return None, None
 
     def _runcomfy_headers(self) -> dict[str, str]:
         token = os.environ.get("RUNCOMFY_API_TOKEN", "").strip()
@@ -624,27 +701,15 @@ class RemoteProvider:
             if str(result_data.get("status", "")).strip().lower() in {"failed", "error"}:
                 raise RuntimeError(f"RunComfy result failed: {result_data}")
 
-            image_url: str | None = None
-            outputs = result_data.get("outputs")
-            if isinstance(outputs, dict):
-                for node_val in outputs.values():
-                    if not isinstance(node_val, dict):
-                        continue
-                    images = node_val.get("images")
-                    if isinstance(images, list):
-                        for img in images:
-                            if isinstance(img, dict):
-                                url = img.get("url") or img.get("URL")
-                                if isinstance(url, str) and url.startswith(("http://", "https://")):
-                                    image_url = url
-                                    break
-                        if image_url:
-                            break
+            image_url, source_node = self._select_runcomfy_image_url(result_data)
             if not image_url:
                 candidates = RemoteProvider._collect_https_urls(result_data)
                 image_url = RemoteProvider._pick_runcomfy_output_image_url(candidates)
             if not image_url:
                 raise RuntimeError(f"RunComfy result missing output image URL: {result_data}")
+            print(
+                f"[runcomfy] downloading panorama from node={source_node or '?'} url={image_url}"
+            )
             raw = self._http_download_bytes(image_url)
             pano = Image.open(io.BytesIO(raw))
             return pano.convert("RGB").resize((width, height), resample=Image.BICUBIC), "runcomfy"
