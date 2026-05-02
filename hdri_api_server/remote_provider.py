@@ -169,12 +169,19 @@ class RemoteProvider:
             if node_id:
                 skip.add(node_id)
 
+        def _image_entries_from_node(node_val: dict[str, Any]) -> list[dict[str, Any]]:
+            entries: list[dict[str, Any]] = []
+            for key in ("images", "pano_input_images", "pano_output_images"):
+                vals = node_val.get(key)
+                if isinstance(vals, list):
+                    entries.extend([img for img in vals if isinstance(img, dict)])
+            return entries
+
         def _images_for(node_id: str) -> list[dict[str, Any]]:
             node_val = outputs.get(node_id)
             if not isinstance(node_val, dict):
                 return []
-            images = node_val.get("images")
-            return [img for img in (images or []) if isinstance(img, dict)]
+            return _image_entries_from_node(node_val)
 
         def _first_url(images: list[dict[str, Any]]) -> str | None:
             for img in images:
@@ -196,10 +203,7 @@ class RemoteProvider:
             for node_id, node_val in outputs.items():
                 if node_id in skip or not isinstance(node_val, dict):
                     continue
-                imgs = node_val.get("images") or []
-                for img in imgs:
-                    if not isinstance(img, dict):
-                        continue
+                for img in _image_entries_from_node(node_val):
                     if str(img.get("type", "")).strip().lower() != desired_type:
                         continue
                     url = img.get("url") or img.get("URL")
@@ -210,7 +214,7 @@ class RemoteProvider:
         for node_id, node_val in outputs.items():
             if node_id in skip or not isinstance(node_val, dict):
                 continue
-            url = _first_url(node_val.get("images") or [])
+            url = _first_url(_image_entries_from_node(node_val))
             if url:
                 return url, str(node_id)
 
