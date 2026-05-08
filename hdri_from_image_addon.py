@@ -510,6 +510,124 @@ def _safe_get_account(base_url: str, headers: dict, timeout_s: int) -> dict | No
     return None
 
 
+def _list_hdri_files(folder_path: str) -> list[str]:
+    if not folder_path or not os.path.isdir(folder_path):
+        return []
+    try:
+        names = [
+            name
+            for name in os.listdir(folder_path)
+            if os.path.isfile(os.path.join(folder_path, name))
+            and name.lower().endswith((".hdr", ".exr"))
+        ]
+    except Exception:
+        return []
+    names.sort(key=lambda n: os.path.getmtime(os.path.join(folder_path, n)), reverse=True)
+    return names
+
+
+def _build_library_output_path(settings, suffix: str) -> str | None:
+    folder_raw = (getattr(settings, "library_folder", "") or "").strip()
+    if not folder_raw:
+        return None
+    folder = bpy.path.abspath(folder_raw)
+    if not folder:
+        return None
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except Exception:
+        return None
+
+    src_path = bpy.path.abspath(getattr(settings, "input_image_path", "") or "")
+    src_stem = os.path.splitext(os.path.basename(src_path))[0].strip() if src_path else ""
+    if not src_stem:
+        src_stem = "hdri"
+    src_stem = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in src_stem).strip("_") or "hdri"
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    base_name = f"{src_stem}_{timestamp}"
+    file_name = f"{base_name}{suffix}"
+    candidate = os.path.join(folder, file_name)
+    if not os.path.exists(candidate):
+        return candidate
+    for idx in range(1, 1000):
+        candidate = os.path.join(folder, f"{base_name}_{idx:03d}{suffix}")
+        if not os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _write_hdri_output_file(settings, file_bytes: bytes, suffix: str) -> tuple[str | None, str | None]:
+    output_path = _build_library_output_path(settings, suffix)
+    if output_path:
+        try:
+            with open(output_path, "wb") as f:
+                f.write(file_bytes)
+            return output_path, None
+        except Exception as e:
+            return None, f"Failed to write HDRI to library folder: {e}"
+
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
+        os.close(fd)
+        with open(tmp_path, "wb") as f:
+            f.write(file_bytes)
+        return tmp_path, None
+    except Exception as e:
+        return None, f"Failed to write temp HDRI file: {e}"
+
+
+def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, str]:
+    try:
+        _ensure_cycles()
+        world = context.scene.world
+        if world is None:
+            world = bpy.data.worlds.new("World")
+            context.scene.world = world
+
+        nodes = _ensure_world_nodes(world)
+        env_node = nodes["env"]
+        env_blur_node = nodes["env_blur"]
+        mix_node = nodes["mix"]
+        tint_mix_node = nodes["tint_mix"]
+        hue_sat_node = nodes["hue_sat"]
+        bg_node = nodes["bg"]
+        mapping_node = nodes["mapping"]
+
+        img = bpy.data.images.load(image_path, check_existing=True)
+        _set_env_image_colorspace(img)
+        env_node.image = img
+        env_blur_node.image = img
+
+        _apply_look_controls_to_nodes(
+            settings,
+            mapping_node,
+            mix_node,
+            tint_mix_node,
+            hue_sat_node,
+            bg_node,
+        )
+
+        if settings.add_preview_sphere:
+            _ensure_preview_sphere()
+
+        if settings.fake_ground:
+            _apply_fake_ground(
+                context,
+                settings,
+                img,
+                mapping_node,
+                mix_node,
+                tint_mix_node,
+                hue_sat_node,
+                bg_node,
+            )
+        else:
+            _set_fake_ground_visible(False)
+    except Exception as e:
+        return False, f"Failed to apply HDRI: {e}"
+    return True, "HDRI applied to World."
+
+
 class HDRI_API_Preferences(AddonPreferences):
     bl_idname = __name__
 
@@ -544,6 +662,17 @@ class HDRI_API_Settings(PropertyGroup):
         description="Path to a photo (jpg/png/webp)",
         default="",
         subtype="FILE_PATH",
+    )
+    library_folder: StringProperty(
+        name="Library Folder",
+        description="Optional folder for generated panoramas (.hdr/.exr). When empty, files stay temporary/local only",
+        default="",
+        subtype="DIR_PATH",
+    )
+    last_library_path: StringProperty(
+        name="Last Saved HDRI",
+        description="Most recent generated HDRI path saved by this addon",
+        default="",
     )
 
     scene_mode: EnumProperty(
@@ -966,76 +1095,71 @@ class HDRI_OT_apply_from_api(Operator):
         elif resp.get("exr_base64"):
             suffix = ".exr"
 
-        try:
-            fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
-            os.close(fd)
-            with open(tmp_path, "wb") as f:
-                f.write(file_bytes)
-        except Exception as e:
-            return False, f"Failed to write temp HDRI file: {e}"
+        image_path, write_err = _write_hdri_output_file(settings, file_bytes, suffix)
+        if image_path is None:
+            return False, write_err or "Failed to write HDRI file."
+        settings.last_library_path = image_path
 
-        try:
-            _ensure_cycles()
-            world = context.scene.world
-            if world is None:
-                world = bpy.data.worlds.new("World")
-                context.scene.world = world
-
-            nodes = _ensure_world_nodes(world)
-            env_node = nodes["env"]
-            env_blur_node = nodes["env_blur"]
-            mix_node = nodes["mix"]
-            tint_mix_node = nodes["tint_mix"]
-            hue_sat_node = nodes["hue_sat"]
-            bg_node = nodes["bg"]
-            mapping_node = nodes["mapping"]
-
-            img = bpy.data.images.load(tmp_path, check_existing=True)
-            _set_env_image_colorspace(img)
-            env_node.image = img
-            env_blur_node.image = img
-
-            _apply_look_controls_to_nodes(
-                settings,
-                mapping_node,
-                mix_node,
-                tint_mix_node,
-                hue_sat_node,
-                bg_node,
-            )
-
-            if settings.add_preview_sphere:
-                _ensure_preview_sphere()
-
-            if settings.fake_ground:
-                _apply_fake_ground(
-                    context,
-                    settings,
-                    img,
-                    mapping_node,
-                    mix_node,
-                    tint_mix_node,
-                    hue_sat_node,
-                    bg_node,
-                )
-            else:
-                _set_fake_ground_visible(False)
-        except Exception as e:
-            return False, f"Failed to apply HDRI: {e}"
+        ok_apply, apply_message = _apply_hdri_image_path(context, settings, image_path)
+        if not ok_apply:
+            return False, apply_message
 
         mode = str(resp.get("panorama_mode", "")).strip()
         if mode:
             settings.last_panorama_mode = mode
         settings.current_job_status = "succeeded"
         self._refresh_tokens(settings)
+        saved_hint = ""
+        library_folder = bpy.path.abspath((settings.library_folder or "").strip()) if settings.library_folder else ""
+        if library_folder:
+            saved_hint = f" Saved to library: {os.path.basename(image_path)}."
         if mode:
             if mode == "resize":
                 return (
                     True,
-                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json).",
+                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json)." + saved_hint,
                 )
-            return True, f"HDRI applied (panorama_mode={mode})."
-        return True, "HDRI applied to World."
+            return True, f"HDRI applied (panorama_mode={mode}).{saved_hint}"
+        return True, "HDRI applied to World." + saved_hint
+
+
+class HDRI_OT_apply_library_hdri(Operator):
+    bl_idname = "hdri.apply_library_hdri"
+    bl_label = "Apply Library HDRI"
+    bl_options = {"REGISTER", "UNDO"}
+
+    file_name: StringProperty(default="")
+
+    def execute(self, context):
+        s = context.scene.hdri_api_settings
+        folder = bpy.path.abspath((s.library_folder or "").strip())
+        if not folder:
+            self.report({"ERROR"}, "Set Library Folder first.")
+            return {"CANCELLED"}
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, f"Library folder not found: {folder}")
+            return {"CANCELLED"}
+
+        target_name = (self.file_name or "").strip()
+        if not target_name:
+            files = _list_hdri_files(folder)
+            if not files:
+                self.report({"ERROR"}, "No .hdr/.exr files found in Library Folder.")
+                return {"CANCELLED"}
+            target_name = files[0]
+
+        path = os.path.join(folder, target_name)
+        if not os.path.isfile(path):
+            self.report({"ERROR"}, f"File not found: {path}")
+            return {"CANCELLED"}
+
+        ok, message = _apply_hdri_image_path(context, s, path)
+        if not ok:
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+        s.last_library_path = path
+        self.report({"INFO"}, f"Applied library HDRI: {target_name}")
+        return {"FINISHED"}
 
     def execute(self, context):
         prefs = _addon_prefs()
@@ -1275,6 +1399,26 @@ class HDRI_PT_panel(Panel):
 
         col = layout.column(align=True)
         col.prop(s, "input_image_path")
+        col.prop(s, "library_folder")
+        library_folder = bpy.path.abspath((s.library_folder or "").strip()) if s.library_folder else ""
+        if library_folder:
+            lib_box = col.box()
+            lib_box.label(text="Library panoramas (.hdr/.exr)")
+            if os.path.isdir(library_folder):
+                files = _list_hdri_files(library_folder)
+                if files:
+                    row = lib_box.row(align=True)
+                    row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Apply Latest", icon="WORLD")
+                    if s.last_library_path:
+                        lib_box.label(text=f"Last saved: {os.path.basename(s.last_library_path)}", icon="FILE_TICK")
+                    for name in files[:8]:
+                        r = lib_box.row(align=True)
+                        op = r.operator(HDRI_OT_apply_library_hdri.bl_idname, text=name, icon="FILE")
+                        op.file_name = name
+                else:
+                    lib_box.label(text="No panoramas found yet.", icon="INFO")
+            else:
+                lib_box.label(text="Folder does not exist yet (will be created on save).", icon="INFO")
         col.prop(s, "provider")
 
         col.separator()
@@ -1369,6 +1513,7 @@ classes = (
     HDRI_API_Settings,
     HDRI_OT_refresh_server_config,
     HDRI_OT_apply_from_api,
+    HDRI_OT_apply_library_hdri,
     HDRI_OT_cancel_job,
     HDRI_PT_panel,
 )
