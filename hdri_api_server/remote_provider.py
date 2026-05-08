@@ -422,6 +422,48 @@ class RemoteProvider:
         return max(35.0, min(140.0, fov))
 
     @staticmethod
+    def _decoded_image_size(image_b64: str) -> tuple[int, int] | None:
+        try:
+            raw = image_b64.strip()
+            if raw.startswith("data:image/"):
+                _, _, raw = raw.partition(",")
+            image_bytes = base64.b64decode(raw, validate=False)
+            with Image.open(io.BytesIO(image_bytes)) as src:
+                w, h = src.size
+            if int(w) > 0 and int(h) > 0:
+                return int(w), int(h)
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _build_runcomfy_sticker_state_json(
+        *,
+        reference_coverage: float,
+        scene_mode: str,
+        source_width: int | None,
+        source_height: int | None,
+    ) -> str:
+        h_fov_deg = RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
+        mode = (scene_mode or "auto").strip().lower()
+        pitch_deg = 5.0 if mode == "outdoor" else 0.0
+        source_aspect = 1.0
+        if source_width and source_height and source_width > 0 and source_height > 0:
+            source_aspect = float(source_width) / float(source_height)
+        payload: dict[str, Any] = {
+            "kind": "pano_sticker_state",
+            "version": 1,
+            "pose": {
+                "yaw_deg": 0.0,
+                "pitch_deg": pitch_deg,
+                "roll_deg": 0.0,
+                "hFOV_deg": h_fov_deg,
+            },
+            "source_aspect": source_aspect,
+        }
+        return json.dumps(payload, separators=(",", ":"))
+
+    @staticmethod
     def _build_runcomfy_panorama_stickers_state_json(
         *,
         image_data_uri: str,
@@ -515,11 +557,25 @@ class RemoteProvider:
             ref_cov = float(ref_cov_val)
 
         load_image_node_ids = self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS")
+        ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
+        use_native_sticker_inputs = (
+            bool(ps_ids)
+            and os.environ.get("RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE", "1").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
         # For the panorama outpainting workflow, the LoadImage node receives a
         # pre-composited 2:1 ERP control PNG (green outpaint area + source
-        # placed front-center). This avoids depending on PanoramaStickers which
-        # only loads images from the deployment's local input/ directory.
-        compose_erp = os.environ.get("RUNCOMFY_LOAD_IMAGE_COMPOSE_ERP", "1").strip().lower() in {"1", "true", "yes", "on"}
+        # placed front-center). This avoids depending on PanoramaStickers asset
+        # resolution when using state_json/assets.
+        #
+        # When RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE=1 and a workflow
+        # wires LoadImage->PanoramaStickers.sticker_image, prefer native
+        # PanoramaStickers projection driven by sticker_state.
+        compose_erp = (
+            not use_native_sticker_inputs
+            and os.environ.get("RUNCOMFY_LOAD_IMAGE_COMPOSE_ERP", "1").strip().lower() in {"1", "true", "yes", "on"}
+        )
         image_ref: str | None = None
         if load_image_node_ids and compose_erp:
             image_ref = self._signed_erp_control_url(
@@ -571,26 +627,44 @@ class RemoteProvider:
         for node_id in self._parse_node_ids("RUNCOMFY_STEPS_NODE_IDS"):
             self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STEPS_INPUT_NAME", "steps"), self._quality_steps(quality_mode))
 
-        # PanoramaStickers (e.g. examples/comfyui_flux2_klein_4b_api.json node 56): image lives in
-        # `state_json`, not LoadImage. NOTE: PanoramaStickers' asset resolver only reads images from
-        # the deployment's local input/ directory; it cannot fetch HTTPS URLs or data URIs. Prefer
-        # the LoadImage + ERP-composition path above; this branch is kept for backwards compat.
-        ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
+        # PanoramaStickers (e.g. examples/comfyui_flux2_klein_4b_api.json node 56).
+        # Preferred path for hosted RunComfy: wire LoadImage->PanoramaStickers.sticker_image
+        # in the workflow and provide pose via sticker_state. This avoids CPU-side ERP
+        # pre-composition and uses PanoramaStickers' canonical projection in-graph.
+        #
+        # Legacy path (state_json/assets) is retained for backward compatibility.
         if ps_ids:
             bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
-            state_str = self._build_runcomfy_panorama_stickers_state_json(
-                image_data_uri=image_ref,
-                width=width,
-                reference_coverage=ref_cov,
-                bg_color=bg,
-            )
-            # RunComfy's PanoramaStickers node expects the preset combo value
-            # ("1024", "2048", "4096"), not a "width x height" label.
             preset = str(width)
+            source_size = self._decoded_image_size(image_b64)
+            src_w = source_size[0] if source_size is not None else None
+            src_h = source_size[1] if source_size is not None else None
             for node_id in ps_ids:
                 self._set_override_value(out, node_id, "output_preset", preset)
                 self._set_override_value(out, node_id, "bg_color", bg)
-                self._set_override_value(out, node_id, "state_json", state_str)
+                if use_native_sticker_inputs:
+                    sticker_state = self._build_runcomfy_sticker_state_json(
+                        reference_coverage=ref_cov,
+                        scene_mode=scene_mode,
+                        source_width=src_w,
+                        source_height=src_h,
+                    )
+                    self._set_override_value(
+                        out,
+                        node_id,
+                        os.environ.get("RUNCOMFY_PANORAMA_STICKER_STATE_INPUT_NAME", "sticker_state"),
+                        sticker_state,
+                    )
+                    # Ensure stale asset-based state doesn't override external sticker image path.
+                    self._set_override_value(out, node_id, "state_json", "")
+                else:
+                    state_str = self._build_runcomfy_panorama_stickers_state_json(
+                        image_data_uri=image_ref,
+                        width=width,
+                        reference_coverage=ref_cov,
+                        bg_color=bg,
+                    )
+                    self._set_override_value(out, node_id, "state_json", state_str)
 
         return out
 

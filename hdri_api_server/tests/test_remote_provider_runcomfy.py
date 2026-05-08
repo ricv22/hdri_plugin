@@ -28,6 +28,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                 image_b64="YWJj",
                 width=2048,
                 height=1024,
+                scene_mode="auto",
                 quality_mode="balanced",
                 overrides={
                     "prompt": "test prompt",
@@ -50,6 +51,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
     def test_panorama_stickers_nodes_get_state_json_and_preset(self) -> None:
         env = {
             "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+            "RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE": "0",
             "RUNCOMFY_PROMPT_NODE_IDS": "6",
             "RUNCOMFY_NEGATIVE_PROMPT_NODE_IDS": "33",
             "RUNCOMFY_SEED_NODE_IDS": "31",
@@ -62,6 +64,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                 image_b64="YWJj",
                 width=2048,
                 height=1024,
+                scene_mode="auto",
                 quality_mode="balanced",
                 overrides={
                     "prompt": "sunset",
@@ -70,7 +73,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                     "strength": 0.55,
                 },
             )
-        self.assertEqual(out["56"]["inputs"]["output_preset"], "2048 x 1024")
+        self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
         self.assertEqual(out["56"]["inputs"]["bg_color"], "#00ff00")
         state = json.loads(out["56"]["inputs"]["state_json"])
         self.assertEqual(state["version"], 1)
@@ -87,10 +90,38 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
             image_b64="YWJj",
             width=1024,
             height=512,
+            scene_mode="auto",
             quality_mode="fast",
             overrides=src,
         )
         self.assertEqual(out, src)
+
+    def test_panorama_stickers_native_sticker_state_mode(self) -> None:
+        env = {
+            "RUNCOMFY_IMAGE_NODE_IDS": "11",
+            "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+            "RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE": "1",
+            "RUNCOMFY_INPUT_IMAGE_TRANSPORT": "data_uri",
+            "RUNCOMFY_DEFAULT_REFERENCE_COVERAGE": "0.6",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            out = self.provider._build_runcomfy_overrides(
+                image_b64="YWJj",
+                width=2048,
+                height=1024,
+                scene_mode="outdoor",
+                quality_mode="balanced",
+                overrides=None,
+            )
+        self.assertEqual(out["11"]["inputs"]["image"], "data:image/jpeg;base64,YWJj")
+        self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
+        self.assertEqual(out["56"]["inputs"]["state_json"], "")
+        sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
+        self.assertEqual(sticker_state["kind"], "pano_sticker_state")
+        self.assertEqual(sticker_state["version"], 1)
+        self.assertEqual(sticker_state["pose"]["yaw_deg"], 0.0)
+        self.assertEqual(sticker_state["pose"]["pitch_deg"], 5.0)
+        self.assertTrue(sticker_state["pose"]["hFOV_deg"] > 0.0)
 
 
 if __name__ == "__main__":
