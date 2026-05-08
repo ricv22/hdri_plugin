@@ -64,17 +64,68 @@ _NET: torch.nn.Module | None = None
 _NET_KEY: str | None = None
 
 
+def _is_gmnet_codes_dir(path: str) -> bool:
+    p = os.path.abspath(path)
+    return os.path.isdir(os.path.join(p, "models")) and os.path.isdir(os.path.join(p, "utils"))
+
+
+def _pick_first_checkpoint_in_dir(ckpt_dir: str) -> str | None:
+    if not os.path.isdir(ckpt_dir):
+        return None
+    for name in ("G_realworld.pth", "G_real.pth", "G_synthetic.pth"):
+        cand = os.path.join(ckpt_dir, name)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _discovered_gmnet_codes_roots() -> list[str]:
+    """
+    Paths commonly used locally and on hosts like RunComfy (no GMNET_CODES_ROOT).
+
+    Typical layout:
+      .../custom_nodes/comfyui_gmnet_itm/   (this package)
+      .../custom_nodes/GMNet/codes/       (GMNet upstream clone)
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    raw = [
+        os.path.join(here, "..", "GMNet", "codes"),
+        os.path.join(here, "GMNet", "codes"),
+        "/workspace/ComfyUI/custom_nodes/GMNet/codes",
+    ]
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in raw:
+        ap = os.path.abspath(r)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        if _is_gmnet_codes_dir(ap):
+            out.append(ap)
+    return out
+
+
 def _gmnet_codes_root() -> str:
     root = os.environ.get("GMNET_CODES_ROOT", "").strip()
-    if not root:
-        raise RuntimeError(
-            "Set GMNET_CODES_ROOT to the GMNet repository's ``codes`` directory "
-            "(the folder containing ``models/`` and ``utils/``). "
-            "Example: C:/src/GMNet/codes"
-        )
-    if not os.path.isdir(root):
-        raise RuntimeError(f"GMNET_CODES_ROOT is not a directory: {root}")
-    return root
+    if root:
+        if not os.path.isdir(root):
+            raise RuntimeError(f"GMNET_CODES_ROOT is not a directory: {root}")
+        if not _is_gmnet_codes_dir(root):
+            raise RuntimeError(
+                "GMNET_CODES_ROOT must point to GMNet's ``codes`` folder "
+                "(must contain ``models`` and ``utils`` subdirectories)."
+            )
+        return os.path.abspath(root)
+
+    for cand in _discovered_gmnet_codes_roots():
+        logger.info("Using GMNet codes directory (auto): %s", cand)
+        return cand
+
+    raise RuntimeError(
+        "Could not find GMNet ``codes`` directory. Either set GMNET_CODES_ROOT to GMNet's "
+        "`codes` folder (with `models/` and `utils/`), or clone GMNet beside this node as "
+        "`custom_nodes/GMNet/` so that `GMNet/codes` exists."
+    )
 
 
 def _default_checkpoint() -> str:
@@ -84,11 +135,15 @@ def _default_checkpoint() -> str:
     # Common layout: clone GMNet next to ComfyUI and put checkpoints under GMNet/checkpoints/
     root = os.environ.get("GMNET_REPO_ROOT", "").strip()
     if root:
-        ckpt_dir = os.path.join(root, "checkpoints")
-        for name in ("G_realworld.pth", "G_real.pth", "G_synthetic.pth"):
-            cand = os.path.join(ckpt_dir, name)
-            if os.path.isfile(cand):
-                return cand
+        hit = _pick_first_checkpoint_in_dir(os.path.join(root, "checkpoints"))
+        if hit:
+            return hit
+
+    for codes in _discovered_gmnet_codes_roots():
+        hit = _pick_first_checkpoint_in_dir(os.path.join(os.path.dirname(codes), "checkpoints"))
+        if hit:
+            return hit
+
     raise RuntimeError(
         "Set GMNET_CHECKPOINT to a .pth file, or set GMNET_REPO_ROOT to the GMNet repo root "
         "containing checkpoints/G_realworld.pth (or G_real.pth) or checkpoints/G_synthetic.pth"

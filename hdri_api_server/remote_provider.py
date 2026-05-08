@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import time
 import uuid
@@ -327,6 +328,18 @@ class RemoteProvider:
 
             bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
 
+            # Match ComfyUI-Panorama-Stickers: derive vFOV from hFOV and the *source* image
+            # aspect, not the ERP canvas. Using v_fov_deg=fov_deg squashes non-square inputs
+            # vertically on the sphere, which reads as a flat poster in Blender world textures.
+            src_w, src_h = src.size
+            if src_w > 0 and src_h > 0:
+                v_fov_deg = math.degrees(
+                    2.0 * math.atan(math.tan(math.radians(fov_deg) * 0.5) * (src_h / src_w))
+                )
+                v_fov_deg = max(0.1, min(179.0, v_fov_deg))
+            else:
+                v_fov_deg = fov_deg
+
             erp = project_pinhole_to_erp(
                 src,
                 canvas_width=int(width),
@@ -334,7 +347,7 @@ class RemoteProvider:
                 yaw_deg=0.0,
                 pitch_deg=pitch_deg,
                 h_fov_deg=fov_deg,
-                v_fov_deg=fov_deg,
+                v_fov_deg=v_fov_deg,
                 rot_deg=0.0,
                 bg_color=bg,
             )
