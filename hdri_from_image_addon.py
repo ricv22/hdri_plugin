@@ -17,6 +17,7 @@ import urllib.request
 import urllib.error
 
 import bpy
+import bpy.utils.previews
 from bpy.props import (
     BoolProperty,
     EnumProperty,
@@ -27,6 +28,12 @@ from bpy.props import (
     StringProperty,
 )
 from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
+
+
+_LIB_PREVIEW_COLLECTION = None
+_LIB_PREVIEW_FOLDER = ""
+_LIB_PREVIEW_SIGNATURE: tuple[tuple[str, float], ...] = ()
+_LIB_PREVIEW_ITEMS: list[tuple[str, str, str, int, int]] = []
 
 
 def _addon_prefs():
@@ -526,6 +533,91 @@ def _list_hdri_files(folder_path: str) -> list[str]:
     return names
 
 
+def _clear_library_previews() -> None:
+    global _LIB_PREVIEW_COLLECTION, _LIB_PREVIEW_FOLDER, _LIB_PREVIEW_SIGNATURE, _LIB_PREVIEW_ITEMS
+    if _LIB_PREVIEW_COLLECTION is not None:
+        try:
+            bpy.utils.previews.remove(_LIB_PREVIEW_COLLECTION)
+        except Exception:
+            pass
+    _LIB_PREVIEW_COLLECTION = None
+    _LIB_PREVIEW_FOLDER = ""
+    _LIB_PREVIEW_SIGNATURE = ()
+    _LIB_PREVIEW_ITEMS = []
+
+
+def _library_signature(folder_path: str, names: list[str]) -> tuple[tuple[str, float], ...]:
+    out: list[tuple[str, float]] = []
+    for name in names:
+        abs_path = os.path.join(folder_path, name)
+        try:
+            mtime = float(os.path.getmtime(abs_path))
+        except Exception:
+            mtime = 0.0
+        out.append((name, mtime))
+    return tuple(out)
+
+
+def _refresh_library_previews(folder_path: str) -> None:
+    global _LIB_PREVIEW_COLLECTION, _LIB_PREVIEW_FOLDER, _LIB_PREVIEW_SIGNATURE, _LIB_PREVIEW_ITEMS
+    names = _list_hdri_files(folder_path)
+    signature = _library_signature(folder_path, names)
+    if (
+        _LIB_PREVIEW_COLLECTION is not None
+        and _LIB_PREVIEW_FOLDER == folder_path
+        and _LIB_PREVIEW_SIGNATURE == signature
+    ):
+        return
+
+    _clear_library_previews()
+    _LIB_PREVIEW_FOLDER = folder_path
+    _LIB_PREVIEW_SIGNATURE = signature
+    if not names:
+        _LIB_PREVIEW_ITEMS = [("__none__", "No panoramas", "No .hdr/.exr files in library folder", 0, 0)]
+        return
+
+    _LIB_PREVIEW_COLLECTION = bpy.utils.previews.new()
+    items: list[tuple[str, str, str, int, int]] = []
+    for idx, name in enumerate(names):
+        abs_path = os.path.join(folder_path, name)
+        icon_id = 0
+        try:
+            thumb = _LIB_PREVIEW_COLLECTION.load(name, abs_path, "IMAGE")
+            icon_id = int(thumb.icon_id)
+        except Exception:
+            icon_id = 0
+        items.append((name, name, abs_path, icon_id, idx))
+    _LIB_PREVIEW_ITEMS = items
+
+
+def _library_gallery_items(self, context):
+    folder_raw = (getattr(self, "library_folder", "") or "").strip()
+    folder = bpy.path.abspath(folder_raw) if folder_raw else ""
+    if not folder or not os.path.isdir(folder):
+        _clear_library_previews()
+        return [("__none__", "No gallery", "Choose a valid library folder", 0, 0)]
+    _refresh_library_previews(folder)
+    return _LIB_PREVIEW_ITEMS or [("__none__", "No panoramas", "No .hdr/.exr files in library folder", 0, 0)]
+
+
+def _update_library_gallery_item(self, context):
+    if context is None:
+        return
+    selected = str(getattr(self, "library_gallery_item", "") or "").strip()
+    if not selected or selected == "__none__":
+        return
+    folder_raw = (getattr(self, "library_folder", "") or "").strip()
+    folder = bpy.path.abspath(folder_raw) if folder_raw else ""
+    if not folder or not os.path.isdir(folder):
+        return
+    path = os.path.join(folder, selected)
+    if not os.path.isfile(path):
+        return
+    ok, _message = _apply_hdri_image_path(context, self, path)
+    if ok:
+        self.last_library_path = path
+
+
 def _build_library_output_path(settings, suffix: str) -> str | None:
     folder_raw = (getattr(settings, "library_folder", "") or "").strip()
     if not folder_raw:
@@ -673,6 +765,12 @@ class HDRI_API_Settings(PropertyGroup):
         name="Last Saved HDRI",
         description="Most recent generated HDRI path saved by this addon",
         default="",
+    )
+    library_gallery_item: EnumProperty(
+        name="Gallery",
+        description="Choose a panorama from library gallery",
+        items=_library_gallery_items,
+        update=_update_library_gallery_item,
     )
 
     scene_mode: EnumProperty(
@@ -1122,45 +1220,6 @@ class HDRI_OT_apply_from_api(Operator):
             return True, f"HDRI applied (panorama_mode={mode}).{saved_hint}"
         return True, "HDRI applied to World." + saved_hint
 
-
-class HDRI_OT_apply_library_hdri(Operator):
-    bl_idname = "hdri.apply_library_hdri"
-    bl_label = "Apply Library HDRI"
-    bl_options = {"REGISTER", "UNDO"}
-
-    file_name: StringProperty(default="")
-
-    def execute(self, context):
-        s = context.scene.hdri_api_settings
-        folder = bpy.path.abspath((s.library_folder or "").strip())
-        if not folder:
-            self.report({"ERROR"}, "Set Library Folder first.")
-            return {"CANCELLED"}
-        if not os.path.isdir(folder):
-            self.report({"ERROR"}, f"Library folder not found: {folder}")
-            return {"CANCELLED"}
-
-        target_name = (self.file_name or "").strip()
-        if not target_name:
-            files = _list_hdri_files(folder)
-            if not files:
-                self.report({"ERROR"}, "No .hdr/.exr files found in Library Folder.")
-                return {"CANCELLED"}
-            target_name = files[0]
-
-        path = os.path.join(folder, target_name)
-        if not os.path.isfile(path):
-            self.report({"ERROR"}, f"File not found: {path}")
-            return {"CANCELLED"}
-
-        ok, message = _apply_hdri_image_path(context, s, path)
-        if not ok:
-            self.report({"ERROR"}, message)
-            return {"CANCELLED"}
-        s.last_library_path = path
-        self.report({"INFO"}, f"Applied library HDRI: {target_name}")
-        return {"FINISHED"}
-
     def execute(self, context):
         prefs = _addon_prefs()
         s = context.scene.hdri_api_settings
@@ -1352,6 +1411,49 @@ class HDRI_OT_apply_library_hdri(Operator):
         return {"CANCELLED"}
 
 
+class HDRI_OT_apply_library_hdri(Operator):
+    bl_idname = "hdri.apply_library_hdri"
+    bl_label = "Apply Library HDRI"
+    bl_options = {"REGISTER", "UNDO"}
+
+    file_name: StringProperty(default="")
+
+    def execute(self, context):
+        s = context.scene.hdri_api_settings
+        folder = bpy.path.abspath((s.library_folder or "").strip())
+        if not folder:
+            self.report({"ERROR"}, "Set Library Folder first.")
+            return {"CANCELLED"}
+        if not os.path.isdir(folder):
+            self.report({"ERROR"}, f"Library folder not found: {folder}")
+            return {"CANCELLED"}
+
+        target_name = (self.file_name or "").strip()
+        if not target_name:
+            selected = str(getattr(s, "library_gallery_item", "") or "").strip()
+            if selected and selected != "__none__":
+                target_name = selected
+        if not target_name:
+            files = _list_hdri_files(folder)
+            if not files:
+                self.report({"ERROR"}, "No .hdr/.exr files found in Library Folder.")
+                return {"CANCELLED"}
+            target_name = files[0]
+
+        path = os.path.join(folder, target_name)
+        if not os.path.isfile(path):
+            self.report({"ERROR"}, f"File not found: {path}")
+            return {"CANCELLED"}
+
+        ok, message = _apply_hdri_image_path(context, s, path)
+        if not ok:
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+        s.last_library_path = path
+        self.report({"INFO"}, f"Applied library HDRI: {target_name}")
+        return {"FINISHED"}
+
+
 class HDRI_OT_cancel_job(Operator):
     bl_idname = "hdri.cancel_job"
     bl_label = "Cancel Job"
@@ -1403,18 +1505,22 @@ class HDRI_PT_panel(Panel):
         library_folder = bpy.path.abspath((s.library_folder or "").strip()) if s.library_folder else ""
         if library_folder:
             lib_box = col.box()
-            lib_box.label(text="Library panoramas (.hdr/.exr)")
+            lib_box.label(text="Library gallery (.hdr/.exr)")
             if os.path.isdir(library_folder):
                 files = _list_hdri_files(library_folder)
                 if files:
                     row = lib_box.row(align=True)
                     row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Apply Latest", icon="WORLD")
+                    selected = str(getattr(s, "library_gallery_item", "") or "")
+                    apply_row = lib_box.row(align=True)
+                    apply_sel = apply_row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Apply Selected", icon="CHECKMARK")
+                    if selected and selected != "__none__":
+                        apply_sel.file_name = selected
+                    else:
+                        apply_row.enabled = False
+                    lib_box.template_icon_view(s, "library_gallery_item", show_labels=True, scale=6.0, scale_popup=4.0)
                     if s.last_library_path:
                         lib_box.label(text=f"Last saved: {os.path.basename(s.last_library_path)}", icon="FILE_TICK")
-                    for name in files[:8]:
-                        r = lib_box.row(align=True)
-                        op = r.operator(HDRI_OT_apply_library_hdri.bl_idname, text=name, icon="FILE")
-                        op.file_name = name
                 else:
                     lib_box.label(text="No panoramas found yet.", icon="INFO")
             else:
@@ -1520,12 +1626,14 @@ classes = (
 
 
 def register():
+    _clear_library_previews()
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.hdri_api_settings = PointerProperty(type=HDRI_API_Settings)
 
 
 def unregister():
+    _clear_library_previews()
     if hasattr(bpy.types.Scene, "hdri_api_settings"):
         del bpy.types.Scene.hdri_api_settings
     for c in reversed(classes):
