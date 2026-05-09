@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photo → HDRI World (API)",
     "author": "Cursor AI",
-    "version": (0, 1, 4),
+    "version": (0, 1, 5),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > HDRI",
     "description": "Upload a photo to an API, get a 2:1 HDRI (.hdr/.exr), apply to World lighting (Cycles).",
@@ -10,6 +10,7 @@ bl_info = {
 
 import base64
 import json
+import math
 import os
 import tempfile
 import time
@@ -18,6 +19,9 @@ import urllib.error
 
 import bpy
 import bpy.utils.previews
+import gpu
+import numpy as np
+from gpu_extras.batch import batch_for_shader
 from bpy.props import (
     BoolProperty,
     EnumProperty,
@@ -517,6 +521,40 @@ def _safe_get_account(base_url: str, headers: dict, timeout_s: int) -> dict | No
     return None
 
 
+def _running_ascii_spinner() -> str:
+    frames = ("|", "/", "-", "\\")
+    idx = int(time.monotonic() * 8.0) % len(frames)
+    return f"[{frames[idx]}]"
+
+
+def _format_duration_compact(seconds: float) -> str:
+    if seconds <= 0 or math.isnan(seconds) or math.isinf(seconds):
+        return "0s"
+    secs = max(1, int(round(seconds)))
+    if secs < 60:
+        return f"{secs}s"
+    m = secs // 60
+    sec = secs % 60
+    return f"{m}m {sec}s"
+
+
+def _default_expected_remote_job_seconds(quality_mode: str) -> float:
+    """Heuristic ETA when no prior completion time exists (remote panorama + HDR)."""
+    q = str(quality_mode or "balanced").strip().lower()
+    if q == "fast":
+        return 90.0
+    if q == "high":
+        return 540.0
+    return 240.0
+
+
+def _expected_remote_job_seconds(settings) -> float:
+    prev = float(getattr(settings, "last_completed_job_wall_s", 0.0) or 0.0)
+    if prev >= 15.0:
+        return prev
+    return _default_expected_remote_job_seconds(getattr(settings, "quality_mode", "balanced"))
+
+
 def _list_hdri_files(folder_path: str) -> list[str]:
     if not folder_path or not os.path.isdir(folder_path):
         return []
@@ -622,7 +660,7 @@ def _build_library_output_path(settings, suffix: str) -> str | None:
     folder_raw = (getattr(settings, "library_folder", "") or "").strip()
     if not folder_raw:
         return None
-    folder = bpy.path.abspath(folder_raw)
+    folder = os.path.normpath(bpy.path.abspath(folder_raw))
     if not folder:
         return None
     try:
@@ -648,24 +686,54 @@ def _build_library_output_path(settings, suffix: str) -> str | None:
     return None
 
 
-def _write_hdri_output_file(settings, file_bytes: bytes, suffix: str) -> tuple[str | None, str | None]:
-    output_path = _build_library_output_path(settings, suffix)
-    if output_path:
+def _write_hdri_output_file(settings, file_bytes: bytes, suffix: str) -> tuple[str | None, str | None, bool]:
+    """
+    Writes HDRI bytes. If Library Folder is set, saves there when possible; on write errors
+    falls back to a temp file so Apply can still succeed. Returns (path, warning_or_error, saved_to_library).
+    """
+    folder_raw = (getattr(settings, "library_folder", "") or "").strip()
+    folder_set = bool(folder_raw)
+
+    if folder_set:
+        lib_path = _build_library_output_path(settings, suffix)
+        if lib_path is None:
+            try:
+                fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
+                os.close(fd)
+                with open(tmp_path, "wb") as f:
+                    f.write(file_bytes)
+                return (
+                    tmp_path,
+                    (
+                        "Library Folder path is invalid or could not be created; "
+                        f"saved HDRI to temp only. Path was: {bpy.path.abspath(folder_raw)!r}"
+                    ),
+                    False,
+                )
+            except Exception as e2:
+                return None, f"Library Folder unusable and temp write failed: {e2}", False
         try:
-            with open(output_path, "wb") as f:
+            with open(lib_path, "wb") as f:
                 f.write(file_bytes)
-            return output_path, None
+            return lib_path, None, True
         except Exception as e:
-            return None, f"Failed to write HDRI to library folder: {e}"
+            try:
+                fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
+                os.close(fd)
+                with open(tmp_path, "wb") as f:
+                    f.write(file_bytes)
+                return tmp_path, f"Library Folder save failed ({e}); saved to temp instead.", False
+            except Exception as e2:
+                return None, f"Library save failed ({e}) and temp save failed ({e2})", False
 
     try:
         fd, tmp_path = tempfile.mkstemp(prefix="hdri_api_", suffix=suffix)
         os.close(fd)
         with open(tmp_path, "wb") as f:
             f.write(file_bytes)
-        return tmp_path, None
+        return tmp_path, None, False
     except Exception as e:
-        return None, f"Failed to write temp HDRI file: {e}"
+        return None, f"Failed to write temp HDRI file: {e}", False
 
 
 def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, str]:
@@ -718,6 +786,202 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
     except Exception as e:
         return False, f"Failed to apply HDRI: {e}"
     return True, "HDRI applied to World."
+
+
+_PLACEMENT_PREVIEW_IMAGE_NAME = "HDRI_Placement_Preview"
+
+
+def _clampf(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def _coverage_to_hfov_deg(coverage: float) -> float:
+    fov = float(coverage) * 212.5
+    return _clampf(fov, 35.0, 140.0)
+
+
+def _sample_rgb_bilinear(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    h, w, _ = img.shape
+    x = np.clip(x, 0.0, w - 1.0)
+    y = np.clip(y, 0.0, h - 1.0)
+
+    x0 = np.floor(x).astype(np.int32)
+    y0 = np.floor(y).astype(np.int32)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+
+    fx = (x - x0)[..., None]
+    fy = (y - y0)[..., None]
+
+    c00 = img[y0, x0]
+    c10 = img[y0, x1]
+    c01 = img[y1, x0]
+    c11 = img[y1, x1]
+
+    c0 = c00 * (1.0 - fx) + c10 * fx
+    c1 = c01 * (1.0 - fx) + c11 * fx
+    return c0 * (1.0 - fy) + c1 * fy
+
+
+def _placement_source_rgb_from_path(path: str, max_edge: int = 384) -> np.ndarray | None:
+    try:
+        img = bpy.data.images.load(path, check_existing=True)
+        w = int(img.size[0])
+        h = int(img.size[1])
+        if w <= 0 or h <= 0:
+            return None
+        px = np.empty(w * h * 4, dtype=np.float32)
+        img.pixels.foreach_get(px)
+        rgba = px.reshape((h, w, 4))
+        rgb = np.clip(rgba[:, :, :3], 0.0, 1.0)
+        long_edge = max(w, h)
+        if long_edge > max_edge:
+            scale = max_edge / float(long_edge)
+            out_w = max(1, int(round(w * scale)))
+            out_h = max(1, int(round(h * scale)))
+            x_idx = np.linspace(0, w - 1, out_w).astype(np.int32)
+            y_idx = np.linspace(0, h - 1, out_h).astype(np.int32)
+            rgb = rgb[np.ix_(y_idx, x_idx)]
+        return np.ascontiguousarray(rgb.astype(np.float32))
+    except Exception:
+        return None
+
+
+def _render_placement_preview_rgb(
+    source_rgb: np.ndarray,
+    *,
+    yaw_deg: float,
+    pitch_deg: float,
+    rotation_deg: float,
+    coverage: float,
+    out_w: int = 512,
+    out_h: int = 256,
+) -> np.ndarray:
+    out_w = max(64, int(out_w))
+    out_h = max(32, int(out_h))
+    if source_rgb.ndim != 3 or source_rgb.shape[2] != 3:
+        return np.zeros((out_h, out_w, 3), dtype=np.float32)
+
+    src_h = max(1, int(source_rgb.shape[0]))
+    src_w = max(1, int(source_rgb.shape[1]))
+    source_aspect = float(src_w) / float(src_h)
+
+    hfov_deg = _coverage_to_hfov_deg(coverage)
+    hfov = math.radians(hfov_deg)
+    vfov = 2.0 * math.atan(math.tan(hfov * 0.5) / max(source_aspect, 1e-6))
+    rot = math.radians(float(rotation_deg))
+
+    ys = (np.arange(out_h, dtype=np.float32) + 0.5) / out_h
+    xs = (np.arange(out_w, dtype=np.float32) + 0.5) / out_w
+    lon = (xs * 2.0 - 1.0) * math.pi
+    lat = (0.5 - ys) * math.pi
+    lon_grid, lat_grid = np.meshgrid(lon, lat)
+
+    dirs = np.stack(
+        [
+            np.cos(lat_grid) * np.sin(lon_grid),
+            np.sin(lat_grid),
+            np.cos(lat_grid) * np.cos(lon_grid),
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+    yaw = math.radians(float(yaw_deg))
+    pitch = math.radians(float(pitch_deg))
+    cp = math.cos(pitch)
+    forward = np.array([cp * math.sin(yaw), math.sin(pitch), cp * math.cos(yaw)], dtype=np.float32)
+    forward = forward / (np.linalg.norm(forward) + 1e-8)
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    if abs(float(np.dot(forward, world_up))) > 0.999:
+        world_up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    right = np.cross(world_up, forward)
+    right = right / (np.linalg.norm(right) + 1e-8)
+    up = np.cross(forward, right)
+    up = up / (np.linalg.norm(up) + 1e-8)
+
+    x_cam = np.tensordot(dirs, right, axes=([-1], [0]))
+    y_cam = np.tensordot(dirs, up, axes=([-1], [0]))
+    z_cam = np.tensordot(dirs, forward, axes=([-1], [0]))
+
+    if abs(rot) > 1e-8:
+        cr = math.cos(rot)
+        sr = math.sin(rot)
+        x_rot = x_cam * cr + y_cam * sr
+        y_rot = -x_cam * sr + y_cam * cr
+        x_cam = x_rot
+        y_cam = y_rot
+
+    tan_h = math.tan(hfov * 0.5)
+    tan_v = math.tan(vfov * 0.5)
+    eps = 1e-6
+    z_safe = np.where(z_cam > eps, z_cam, 1.0)
+    u = x_cam / (z_safe * tan_h)
+    v = y_cam / (z_safe * tan_v)
+
+    visible = (z_cam > eps) & (np.abs(u) <= 1.0) & (np.abs(v) <= 1.0)
+    sx = (u + 1.0) * 0.5 * (src_w - 1)
+    sy = (1.0 - (v + 1.0) * 0.5) * (src_h - 1)
+
+    out = np.empty((out_h, out_w, 3), dtype=np.float32)
+    out[:, :, :] = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    if np.any(visible):
+        sampled = _sample_rgb_bilinear(source_rgb, sx, sy)
+        out[visible] = sampled[visible]
+    return np.clip(out, 0.0, 1.0)
+
+
+def _ensure_placement_preview_image(width: int, height: int) -> bpy.types.Image:
+    img = bpy.data.images.get(_PLACEMENT_PREVIEW_IMAGE_NAME)
+    if img is None:
+        img = bpy.data.images.new(_PLACEMENT_PREVIEW_IMAGE_NAME, width=width, height=height, alpha=True, float_buffer=False)
+    elif int(img.size[0]) != width or int(img.size[1]) != height:
+        img.scale(width, height)
+    return img
+
+
+def _update_preview_image_pixels(img: bpy.types.Image, rgb: np.ndarray) -> None:
+    h, w, _ = rgb.shape
+    rgba = np.ones((h, w, 4), dtype=np.float32)
+    rgba[:, :, :3] = rgb
+    img.pixels.foreach_set(rgba.reshape(-1))
+    img.update()
+
+
+def _refresh_placement_preview(settings, context=None, source_rgb: np.ndarray | None = None) -> None:
+    if context is None:
+        context = bpy.context
+    if context is None:
+        return
+
+    if source_rgb is None:
+        src_path = bpy.path.abspath(getattr(settings, "input_image_path", "") or "")
+        if not src_path or not os.path.exists(src_path):
+            return
+        source_rgb = _placement_source_rgb_from_path(src_path)
+    if source_rgb is None:
+        return
+
+    rgb = _render_placement_preview_rgb(
+        source_rgb,
+        yaw_deg=float(getattr(settings, "placement_yaw_deg", 0.0)),
+        pitch_deg=float(getattr(settings, "placement_pitch_deg", 0.0)),
+        rotation_deg=float(getattr(settings, "placement_rotation_deg", 0.0)),
+        coverage=float(getattr(settings, "placement_coverage", 0.6)),
+    )
+    img = _ensure_placement_preview_image(int(rgb.shape[1]), int(rgb.shape[0]))
+    _update_preview_image_pixels(img, rgb)
+    settings.placement_preview_image = img
+
+
+def _update_placement_controls(self, context):
+    try:
+        ref_cov = float(getattr(self, "reference_coverage", 0.6))
+        place_cov = float(getattr(self, "placement_coverage", ref_cov))
+        if abs(ref_cov - place_cov) > 1e-6:
+            self.reference_coverage = place_cov
+    except Exception:
+        pass
+    _refresh_placement_preview(self, context)
 
 
 class HDRI_API_Preferences(AddonPreferences):
@@ -996,10 +1260,50 @@ class HDRI_API_Settings(PropertyGroup):
     )
     reference_coverage: FloatProperty(
         name="Reference Coverage",
-        description="How much panorama width the source image should occupy on control canvas",
+        description="Legacy alias for placement coverage",
         default=0.60,
         min=0.15,
         max=0.85,
+    )
+    placement_coverage: FloatProperty(
+        name="Placement Scale",
+        description="How much panorama width the source image should occupy",
+        default=0.60,
+        min=0.15,
+        max=0.85,
+        update=_update_placement_controls,
+    )
+    placement_yaw_deg: FloatProperty(
+        name="Placement Yaw",
+        description="Horizontal panorama placement in degrees",
+        default=0.0,
+        min=-180.0,
+        max=180.0,
+        update=_update_placement_controls,
+    )
+    placement_pitch_deg: FloatProperty(
+        name="Placement Pitch",
+        description="Vertical panorama placement in degrees",
+        default=0.0,
+        min=-85.0,
+        max=85.0,
+        update=_update_placement_controls,
+    )
+    placement_rotation_deg: FloatProperty(
+        name="Placement Rotation",
+        description="Sticker in-plane rotation in degrees",
+        default=0.0,
+        min=-180.0,
+        max=180.0,
+        update=_update_placement_controls,
+    )
+    placement_hfov_deg: FloatProperty(
+        name="Placement hFOV",
+        description="Optional explicit horizontal FOV override (0 = use Placement Scale)",
+        default=0.0,
+        min=0.0,
+        max=179.0,
+        update=_update_placement_controls,
     )
     seam_fix: BoolProperty(
         name="Seam Fix",
@@ -1070,11 +1374,29 @@ class HDRI_API_Settings(PropertyGroup):
         description="Last async job error message",
         default="",
     )
+    placement_preview_image: PointerProperty(
+        name="Placement Preview",
+        type=bpy.types.Image,
+    )
     tokens_remaining: IntProperty(
         name="Tokens Remaining",
         description="Latest token balance returned by /v1/account (-1 means unknown)",
         default=-1,
         min=-1,
+    )
+
+    job_started_monotonic: FloatProperty(
+        name="Job Start (mono)",
+        default=-1.0,
+        description="Internal: time.monotonic() when polling started (-1 means idle)",
+        options={"HIDDEN"},
+    )
+    last_completed_job_wall_s: FloatProperty(
+        name="Last Job Duration",
+        default=0.0,
+        min=0.0,
+        description="Internal: wall duration of last successful job for ETA refinement",
+        options={"HIDDEN"},
     )
 
 
@@ -1108,6 +1430,216 @@ class HDRI_OT_refresh_server_config(Operator):
         s.server_config_panorama_mode = mode
         self.report({"INFO"}, f"Server PANORAMA_MODE={mode}")
         return {"FINISHED"}
+
+
+class HDRI_OT_open_placement_editor(Operator):
+    bl_idname = "hdri.open_placement_editor"
+    bl_label = "Open placement editor"
+    bl_description = "Drag the source image on a 2:1 panorama preview and scale/rotate it"
+    bl_options = {"REGISTER", "UNDO"}
+
+    _draw_handle = None
+    _timer = None
+    _area = None
+    _source_rgb = None
+    _dragging = False
+    _rotation_drag = False
+    _last_mouse = (0, 0)
+    _canvas_rect = (0, 0, 0, 0)
+    _start_values = None
+
+    def _cleanup(self, context):
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
+            self._timer = None
+        if self._draw_handle is not None:
+            try:
+                bpy.types.SpaceView3D.draw_handler_remove(self._draw_handle, "WINDOW")
+            except Exception:
+                pass
+            self._draw_handle = None
+        if self._area is not None:
+            try:
+                self._area.tag_redraw()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _canvas_for_region(region) -> tuple[int, int, int, int]:
+        margin_x = 40
+        margin_y = 60
+        cw = max(320, min(760, int(region.width - margin_x * 2)))
+        ch = cw // 2
+        max_h = max(180, int(region.height - margin_y * 2))
+        if ch > max_h:
+            ch = max_h
+            cw = ch * 2
+        x = int((region.width - cw) * 0.5)
+        y = int((region.height - ch) * 0.5)
+        return x, y, cw, ch
+
+    def _inside_canvas(self, mx: int, my: int) -> bool:
+        x, y, w, h = self._canvas_rect
+        return (x <= mx <= x + w) and (y <= my <= y + h)
+
+    def _render_preview(self, context):
+        settings = context.scene.hdri_api_settings
+        _refresh_placement_preview(settings, context=context, source_rgb=self._source_rgb)
+        if self._area is not None:
+            self._area.tag_redraw()
+
+    def _draw_callback(self):
+        context = bpy.context
+        settings = context.scene.hdri_api_settings
+        region = context.region
+        if region is None:
+            return
+
+        x, y, w, h = self._canvas_for_region(region)
+        self._canvas_rect = (x, y, w, h)
+        img = settings.placement_preview_image
+
+        if img is not None:
+            try:
+                tex = gpu.texture.from_image(img)
+                shader = gpu.shader.from_builtin("IMAGE")
+                batch = batch_for_shader(
+                    shader,
+                    "TRI_FAN",
+                    {
+                        "pos": ((x, y), (x + w, y), (x + w, y + h), (x, y + h)),
+                        "texCoord": ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+                    },
+                )
+                gpu.state.blend_set("ALPHA")
+                shader.bind()
+                shader.uniform_sampler("image", tex)
+                batch.draw(shader)
+            except Exception:
+                pass
+
+        outline = gpu.shader.from_builtin("UNIFORM_COLOR")
+        outline.bind()
+        outline.uniform_float("color", (1.0, 1.0, 1.0, 0.9))
+        frame = batch_for_shader(
+            outline,
+            "LINE_LOOP",
+            {"pos": ((x, y), (x + w, y), (x + w, y + h), (x, y + h))},
+        )
+        frame.draw(outline)
+
+        cx = x + w * 0.5
+        cy = y + h * 0.5
+        cross = batch_for_shader(
+            outline,
+            "LINES",
+            {
+                "pos": (
+                    (cx, y),
+                    (cx, y + h),
+                    (x, cy),
+                    (x + w, cy),
+                )
+            },
+        )
+        outline.uniform_float("color", (1.0, 1.0, 1.0, 0.35))
+        cross.draw(outline)
+        gpu.state.blend_set("NONE")
+
+    def invoke(self, context, event):
+        settings = context.scene.hdri_api_settings
+        src_path = bpy.path.abspath(settings.input_image_path)
+        if not src_path or not os.path.exists(src_path):
+            self.report({"ERROR"}, "Pick an input image first.")
+            return {"CANCELLED"}
+
+        source_rgb = _placement_source_rgb_from_path(src_path)
+        if source_rgb is None:
+            self.report({"ERROR"}, "Unable to decode the input image for placement preview.")
+            return {"CANCELLED"}
+
+        self._source_rgb = source_rgb
+        self._start_values = (
+            float(settings.placement_yaw_deg),
+            float(settings.placement_pitch_deg),
+            float(settings.placement_rotation_deg),
+            float(settings.placement_coverage),
+            float(settings.reference_coverage),
+            float(settings.placement_hfov_deg),
+        )
+        self._area = context.area
+        self._draw_handle = bpy.types.SpaceView3D.draw_handler_add(self._draw_callback, (), "WINDOW", "POST_PIXEL")
+        self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
+        self._render_preview(context)
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        settings = context.scene.hdri_api_settings
+
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+            (
+                settings.placement_yaw_deg,
+                settings.placement_pitch_deg,
+                settings.placement_rotation_deg,
+                settings.placement_coverage,
+                settings.reference_coverage,
+                settings.placement_hfov_deg,
+            ) = self._start_values
+            self._render_preview(context)
+            self._cleanup(context)
+            return {"CANCELLED"}
+
+        if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
+            self._cleanup(context)
+            return {"FINISHED"}
+
+        if event.type == "R" and event.value == "PRESS":
+            self._rotation_drag = not self._rotation_drag
+            return {"RUNNING_MODAL"}
+
+        if event.type in {"WHEELUPMOUSE", "WHEELDOWNMOUSE"} and event.value == "PRESS":
+            step = 0.02 if event.type == "WHEELUPMOUSE" else -0.02
+            settings.placement_coverage = _clampf(float(settings.placement_coverage) + step, 0.15, 0.85)
+            settings.reference_coverage = float(settings.placement_coverage)
+            self._render_preview(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type == "LEFTMOUSE":
+            if event.value == "PRESS" and self._inside_canvas(event.mouse_region_x, event.mouse_region_y):
+                self._dragging = True
+                self._last_mouse = (event.mouse_region_x, event.mouse_region_y)
+                return {"RUNNING_MODAL"}
+            if event.value == "RELEASE" and self._dragging:
+                self._dragging = False
+                self._cleanup(context)
+                return {"FINISHED"}
+
+        if event.type == "MOUSEMOVE" and self._dragging:
+            mx = int(event.mouse_region_x)
+            my = int(event.mouse_region_y)
+            x, y, w, h = self._canvas_rect
+            if self._rotation_drag:
+                dx = float(mx - self._last_mouse[0])
+                settings.placement_rotation_deg = _clampf(float(settings.placement_rotation_deg) + dx * 0.35, -180.0, 180.0)
+            else:
+                nx = _clampf((mx - x) / max(1, w), 0.0, 1.0)
+                ny = _clampf((my - y) / max(1, h), 0.0, 1.0)
+                settings.placement_yaw_deg = (nx - 0.5) * 360.0
+                settings.placement_pitch_deg = (0.5 - ny) * 170.0
+            self._last_mouse = (mx, my)
+            self._render_preview(context)
+            return {"RUNNING_MODAL"}
+
+        if event.type == "TIMER":
+            if self._area is not None:
+                self._area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        return {"PASS_THROUGH"}
 
 
 class HDRI_OT_apply_from_api(Operator):
@@ -1193,9 +1725,10 @@ class HDRI_OT_apply_from_api(Operator):
         elif resp.get("exr_base64"):
             suffix = ".exr"
 
-        image_path, write_err = _write_hdri_output_file(settings, file_bytes, suffix)
+        image_path, write_warn, saved_to_library = _write_hdri_output_file(settings, file_bytes, suffix)
         if image_path is None:
-            return False, write_err or "Failed to write HDRI file."
+            return False, write_warn or "Failed to write HDRI file."
+
         settings.last_library_path = image_path
 
         ok_apply, apply_message = _apply_hdri_image_path(context, settings, image_path)
@@ -1207,18 +1740,26 @@ class HDRI_OT_apply_from_api(Operator):
             settings.last_panorama_mode = mode
         settings.current_job_status = "succeeded"
         self._refresh_tokens(settings)
-        saved_hint = ""
-        library_folder = bpy.path.abspath((settings.library_folder or "").strip()) if settings.library_folder else ""
-        if library_folder:
-            saved_hint = f" Saved to library: {os.path.basename(image_path)}."
+
+        hints: list[str] = []
+        if saved_to_library:
+            hints.append(f"Saved to library: {os.path.basename(image_path)}.")
+        else:
+            if write_warn:
+                hints.append(str(write_warn))
+            elif (settings.library_folder or "").strip():
+                hints.append("Library Folder is set but the file was not saved there.")
+
+        suffix_msg = (" " + " ".join(hints)) if hints else ""
         if mode:
             if mode == "resize":
                 return (
                     True,
-                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json)." + saved_hint,
+                    "HDRI applied (panorama_mode=resize — photo stretched to 2:1; prompts unused until API uses PANORAMA_MODE=http_json)."
+                    + suffix_msg,
                 )
-            return True, f"HDRI applied (panorama_mode={mode}).{saved_hint}"
-        return True, "HDRI applied to World." + saved_hint
+            return True, f"HDRI applied (panorama_mode={mode}).{suffix_msg}"
+        return True, "HDRI applied to World." + suffix_msg
 
     def execute(self, context):
         prefs = _addon_prefs()
@@ -1285,7 +1826,13 @@ class HDRI_OT_apply_from_api(Operator):
         if s.panorama_strength >= 0.0:
             payload["panorama_strength"] = float(s.panorama_strength)
         payload["erp_layout_mode"] = s.erp_layout_mode
-        payload["reference_coverage"] = float(s.reference_coverage)
+        payload["reference_coverage"] = float(s.placement_coverage)
+        payload["placement_coverage"] = float(s.placement_coverage)
+        payload["placement_yaw_deg"] = float(s.placement_yaw_deg)
+        payload["placement_pitch_deg"] = float(s.placement_pitch_deg)
+        payload["placement_rotation_deg"] = float(s.placement_rotation_deg)
+        if s.placement_hfov_deg > 0.0:
+            payload["placement_hfov_deg"] = float(s.placement_hfov_deg)
         payload["seam_fix"] = bool(s.seam_fix)
         if s.erp_canvas_width > 0:
             payload["erp_canvas_width"] = int(s.erp_canvas_width)
@@ -1328,6 +1875,7 @@ class HDRI_OT_apply_from_api(Operator):
         s.current_job_id = job_id
         s.current_job_status = "queued"
         s.last_job_error = ""
+        s.job_started_monotonic = float(time.monotonic())
         self._job_id = job_id
         self._base_url = base
         self._headers = headers
@@ -1344,6 +1892,7 @@ class HDRI_OT_apply_from_api(Operator):
             s.current_job_status = ""
             s.current_job_id = ""
             s.last_job_error = "cancelled by user"
+            s.job_started_monotonic = -1.0
             self._refresh_tokens(s)
             self.report({"INFO"}, "HDRI generation cancelled.")
             return {"CANCELLED"}
@@ -1356,6 +1905,7 @@ class HDRI_OT_apply_from_api(Operator):
             self._cancel_remote_job()
             s.current_job_status = "failed"
             s.last_job_error = "Job polling timed out."
+            s.job_started_monotonic = -1.0
             self._refresh_tokens(s)
             self.report({"ERROR"}, "Job polling timed out.")
             return {"CANCELLED"}
@@ -1370,6 +1920,7 @@ class HDRI_OT_apply_from_api(Operator):
             self._clear_modal_timer(context)
             s.current_job_status = "failed"
             s.last_job_error = f"Polling failed: {e}"
+            s.job_started_monotonic = -1.0
             self.report({"ERROR"}, s.last_job_error[:300])
             return {"CANCELLED"}
 
@@ -1377,6 +1928,7 @@ class HDRI_OT_apply_from_api(Operator):
             self._clear_modal_timer(context)
             s.current_job_status = "failed"
             s.last_job_error = "Invalid job status response."
+            s.job_started_monotonic = -1.0
             self.report({"ERROR"}, s.last_job_error)
             return {"CANCELLED"}
 
@@ -1384,29 +1936,49 @@ class HDRI_OT_apply_from_api(Operator):
         if status:
             s.current_job_status = status
         if status in {"queued", "running"}:
+            # Force panel redraw so spinner/status hints animate while modal polling runs.
+            wm = getattr(context, "window_manager", None)
+            windows = getattr(wm, "windows", []) if wm is not None else []
+            for win in windows:
+                screen = getattr(win, "screen", None)
+                if screen is None:
+                    continue
+                for area in screen.areas:
+                    if area.type == "VIEW_3D":
+                        area.tag_redraw()
             return {"RUNNING_MODAL"}
 
         self._clear_modal_timer(context)
         if status == "failed":
             err = str(status_resp.get("error", "Job failed without details."))
             s.last_job_error = err
+            s.job_started_monotonic = -1.0
             self._refresh_tokens(s)
             self.report({"ERROR"}, f"Job failed: {err[:300]}")
             return {"CANCELLED"}
         if status == "succeeded":
+            start_mono = float(getattr(s, "job_started_monotonic", -1.0))
             ok, message = self._apply_hdri_response(context, s, _addon_prefs(), status_resp)
             if ok:
+                if start_mono >= 0.0:
+                    elapsed_job = float(time.monotonic()) - start_mono
+                    # Skip very short durations (misconfig/timeouts/noise).
+                    if elapsed_job >= 45.0:
+                        s.last_completed_job_wall_s = elapsed_job
+                s.job_started_monotonic = -1.0
                 s.current_job_id = ""
                 s.last_job_error = ""
                 self.report({"INFO"}, message)
                 return {"FINISHED"}
             s.current_job_status = "failed"
             s.last_job_error = message
+            s.job_started_monotonic = -1.0
             self.report({"ERROR"}, message[:300])
             return {"CANCELLED"}
 
         s.current_job_status = "failed"
         s.last_job_error = f"Unexpected job status: {status or '(missing)'}"
+        s.job_started_monotonic = -1.0
         self.report({"ERROR"}, s.last_job_error)
         return {"CANCELLED"}
 
@@ -1478,6 +2050,7 @@ class HDRI_OT_cancel_job(Operator):
         s.current_job_status = ""
         s.current_job_id = ""
         s.last_job_error = "cancelled by user"
+        s.job_started_monotonic = -1.0
         acct = _safe_get_account(base, headers, timeout_s=10)
         if acct and "tokens_remaining" in acct:
             try:
@@ -1579,7 +2152,33 @@ class HDRI_PT_panel(Panel):
         if s.current_job_id:
             box.label(text=f"Current job: {s.current_job_id}", icon="TIME")
         if active_job:
-            box.label(text=f"Generating... ({s.current_job_status})", icon="TIME")
+            prefs_eta = _addon_prefs()
+            t0 = float(getattr(s, "job_started_monotonic", -1.0))
+            if t0 >= 0.0:
+                elapsed = float(time.monotonic()) - t0
+                expected = float(_expected_remote_job_seconds(s))
+                remaining = max(0.0, expected - elapsed)
+                budget = max(1.0, float(prefs_eta.timeout_s))
+                learns = ""
+                if float(getattr(s, "last_completed_job_wall_s", 0.0) or 0.0) >= 15.0:
+                    learns = " (from last job)"
+                elif expected > 0.0:
+                    learns = " (typical heuristic)"
+                box.label(
+                    text=(
+                        f"Elapsed {_format_duration_compact(elapsed)}  ·  est. left ~{_format_duration_compact(remaining)}"
+                        f"  ·  timeout {_format_duration_compact(budget)}{learns}"
+                    ),
+                    icon="TIME",
+                )
+            status_now = (s.current_job_status or "").strip().lower()
+            if status_now == "running":
+                box.label(text=f"Job status: 🟢 running", icon="INFO")
+                box.label(text=f"  {_running_ascii_spinner()} generating", icon="BLANK1")
+            elif status_now == "queued":
+                box.label(text=f"Job status: 🔵 queued", icon="INFO")
+            else:
+                box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
         elif s.current_job_status:
             box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
         if s.last_job_error:
@@ -1591,13 +2190,24 @@ class HDRI_PT_panel(Panel):
         box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")
         box.label(text="Local mode: run API server + worker + ComfyUI before Generate.", icon="INFO")
         col2 = box.column(align=True)
+        if s.placement_preview_image is None and (s.input_image_path or "").strip():
+            _refresh_placement_preview(s, context=context)
         col2.prop(s, "panorama_prompt")
         col2.prop(s, "panorama_negative_prompt")
         row = col2.row(align=True)
         row.prop(s, "panorama_seed")
         row.prop(s, "panorama_strength")
         col2.prop(s, "erp_layout_mode")
-        col2.prop(s, "reference_coverage")
+        col2.label(text="Placement")
+        col2.prop(s, "placement_coverage")
+        row_place = col2.row(align=True)
+        row_place.prop(s, "placement_yaw_deg")
+        row_place.prop(s, "placement_pitch_deg")
+        col2.prop(s, "placement_rotation_deg")
+        col2.prop(s, "placement_hfov_deg")
+        col2.operator(HDRI_OT_open_placement_editor.bl_idname, icon="ORIENTATION_VIEW")
+        if s.placement_preview_image is not None:
+            col2.template_preview(s.placement_preview_image, show_buttons=False)
         col2.prop(s, "seam_fix")
         row2 = col2.row(align=True)
         row2.prop(s, "erp_canvas_width")
@@ -1618,6 +2228,7 @@ classes = (
     HDRI_API_Preferences,
     HDRI_API_Settings,
     HDRI_OT_refresh_server_config,
+    HDRI_OT_open_placement_editor,
     HDRI_OT_apply_from_api,
     HDRI_OT_apply_library_hdri,
     HDRI_OT_cancel_job,

@@ -109,6 +109,36 @@ class HdriRequest(BaseModel):
         le=0.85,
         description="Relative width coverage of source image on ERP control canvas.",
     )
+    placement_coverage: float | None = Field(
+        None,
+        ge=0.15,
+        le=0.85,
+        description="Alias for reference_coverage used by placement UI.",
+    )
+    placement_yaw_deg: float | None = Field(
+        None,
+        ge=-180.0,
+        le=180.0,
+        description="Panorama sticker yaw in degrees.",
+    )
+    placement_pitch_deg: float | None = Field(
+        None,
+        ge=-85.0,
+        le=85.0,
+        description="Panorama sticker pitch in degrees.",
+    )
+    placement_rotation_deg: float | None = Field(
+        None,
+        ge=-180.0,
+        le=180.0,
+        description="Panorama sticker in-plane rotation in degrees.",
+    )
+    placement_hfov_deg: float | None = Field(
+        None,
+        ge=1.0,
+        le=179.0,
+        description="Optional explicit sticker horizontal FOV; overrides coverage mapping if set.",
+    )
     seam_fix: bool | None = Field(
         None,
         description="If set, overrides worker seam-fix default behavior.",
@@ -385,8 +415,18 @@ def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
         overrides["strength"] = req.panorama_strength
     if req.erp_layout_mode is not None:
         overrides["erp_layout_mode"] = req.erp_layout_mode
-    if req.reference_coverage is not None:
-        overrides["reference_coverage"] = req.reference_coverage
+    coverage = req.placement_coverage if req.placement_coverage is not None else req.reference_coverage
+    if coverage is not None:
+        overrides["reference_coverage"] = coverage
+        overrides["placement_coverage"] = coverage
+    if req.placement_yaw_deg is not None:
+        overrides["placement_yaw_deg"] = req.placement_yaw_deg
+    if req.placement_pitch_deg is not None:
+        overrides["placement_pitch_deg"] = req.placement_pitch_deg
+    if req.placement_rotation_deg is not None:
+        overrides["placement_rotation_deg"] = req.placement_rotation_deg
+    if req.placement_hfov_deg is not None:
+        overrides["placement_hfov_deg"] = req.placement_hfov_deg
     if req.seam_fix is not None:
         overrides["seam_fix"] = req.seam_fix
     if req.erp_canvas_width is not None:

@@ -443,21 +443,32 @@ class RemoteProvider:
         scene_mode: str,
         source_width: int | None,
         source_height: int | None,
+        yaw_deg: float | None = None,
+        pitch_deg: float | None = None,
+        rot_deg: float | None = None,
+        h_fov_deg: float | None = None,
     ) -> str:
-        h_fov_deg = RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
         mode = (scene_mode or "auto").strip().lower()
-        pitch_deg = 5.0 if mode == "outdoor" else 0.0
+        default_pitch = 5.0 if mode == "outdoor" else 0.0
         source_aspect = 1.0
         if source_width and source_height and source_width > 0 and source_height > 0:
             source_aspect = float(source_width) / float(source_height)
+
+        resolved_hfov = (
+            float(h_fov_deg)
+            if h_fov_deg is not None
+            else RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
+        )
+        resolved_hfov = max(1.0, min(179.0, resolved_hfov))
+
         payload: dict[str, Any] = {
             "kind": "pano_sticker_state",
             "version": 1,
             "pose": {
-                "yaw_deg": 0.0,
-                "pitch_deg": pitch_deg,
-                "roll_deg": 0.0,
-                "hFOV_deg": h_fov_deg,
+                "yaw_deg": float(0.0 if yaw_deg is None else yaw_deg),
+                "pitch_deg": float(default_pitch if pitch_deg is None else pitch_deg),
+                "roll_deg": float(0.0 if rot_deg is None else rot_deg),
+                "hFOV_deg": float(resolved_hfov),
             },
             "source_aspect": source_aspect,
         }
@@ -547,7 +558,7 @@ class RemoteProvider:
                 return out
 
         generic = overrides or {}
-        ref_cov_val = generic.get("reference_coverage")
+        ref_cov_val = generic.get("placement_coverage", generic.get("reference_coverage"))
         if ref_cov_val is None:
             try:
                 ref_cov = float(os.environ.get("RUNCOMFY_DEFAULT_REFERENCE_COVERAGE", "0.4"))
@@ -555,6 +566,11 @@ class RemoteProvider:
                 ref_cov = 0.4
         else:
             ref_cov = float(ref_cov_val)
+
+        placement_yaw = generic.get("placement_yaw_deg")
+        placement_pitch = generic.get("placement_pitch_deg")
+        placement_rot = generic.get("placement_rotation_deg")
+        placement_hfov = generic.get("placement_hfov_deg")
 
         load_image_node_ids = self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS")
         ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
@@ -610,13 +626,16 @@ class RemoteProvider:
             for node_id in self._parse_node_ids("RUNCOMFY_STRENGTH_NODE_IDS"):
                 self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_STRENGTH_INPUT_NAME", "denoise"), generic["strength"])
 
-        if generic.get("reference_coverage") is not None:
+        coverage_value = generic.get("placement_coverage")
+        if coverage_value is None:
+            coverage_value = generic.get("reference_coverage")
+        if coverage_value is not None:
             for node_id in self._parse_node_ids("RUNCOMFY_REFERENCE_COVERAGE_NODE_IDS"):
                 self._set_override_value(
                     out,
                     node_id,
                     os.environ.get("RUNCOMFY_REFERENCE_COVERAGE_INPUT_NAME", "reference_coverage"),
-                    generic["reference_coverage"],
+                    coverage_value,
                 )
 
         # Resolution and quality controls.
@@ -648,6 +667,10 @@ class RemoteProvider:
                         scene_mode=scene_mode,
                         source_width=src_w,
                         source_height=src_h,
+                        yaw_deg=float(placement_yaw) if placement_yaw is not None else None,
+                        pitch_deg=float(placement_pitch) if placement_pitch is not None else None,
+                        rot_deg=float(placement_rot) if placement_rot is not None else None,
+                        h_fov_deg=float(placement_hfov) if placement_hfov is not None else None,
                     )
                     self._set_override_value(
                         out,

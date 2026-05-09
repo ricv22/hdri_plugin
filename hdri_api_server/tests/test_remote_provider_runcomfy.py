@@ -111,7 +111,13 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                 height=1024,
                 scene_mode="outdoor",
                 quality_mode="balanced",
-                overrides=None,
+                overrides={
+                    "placement_coverage": 0.5,
+                    "placement_yaw_deg": 12.0,
+                    "placement_pitch_deg": -6.0,
+                    "placement_rotation_deg": 18.0,
+                    "placement_hfov_deg": 72.0,
+                },
             )
         self.assertEqual(out["11"]["inputs"]["image"], "data:image/jpeg;base64,YWJj")
         self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
@@ -119,9 +125,11 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
         self.assertEqual(sticker_state["kind"], "pano_sticker_state")
         self.assertEqual(sticker_state["version"], 1)
-        self.assertEqual(sticker_state["pose"]["yaw_deg"], 0.0)
-        self.assertEqual(sticker_state["pose"]["pitch_deg"], 5.0)
-        self.assertTrue(sticker_state["pose"]["hFOV_deg"] > 0.0)
+        self.assertEqual(sticker_state["pose"]["yaw_deg"], 12.0)
+        self.assertEqual(sticker_state["pose"]["pitch_deg"], -6.0)
+        self.assertEqual(sticker_state["pose"]["roll_deg"], 18.0)
+        self.assertEqual(sticker_state["pose"]["hFOV_deg"], 72.0)
+        self.assertNotIn("vFOV_deg", sticker_state["pose"])
 
 
 if __name__ == "__main__":
