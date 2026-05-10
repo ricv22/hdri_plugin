@@ -481,6 +481,12 @@ class RemoteProvider:
         width: int,
         reference_coverage: float,
         bg_color: str,
+        yaw_deg: float = 0.0,
+        pitch_deg: float = 0.0,
+        rot_deg: float = 0.0,
+        h_fov_deg: float | None = None,
+        source_width: int | None = None,
+        source_height: int | None = None,
     ) -> str:
         """
         Build PanoramaStickers `state_json` for RunComfy. RunComfy accepts media as
@@ -489,7 +495,12 @@ class RemoteProvider:
         """
         asset_id = "asset_uploaded"
         sticker_id = "st_uploaded"
-        fov_deg = RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
+        fov_deg = float(h_fov_deg) if h_fov_deg is not None else RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
+        source_aspect = 1.0
+        if source_width and source_height and source_width > 0 and source_height > 0:
+            source_aspect = float(source_width) / float(source_height)
+        v_fov_deg = math.degrees(2.0 * math.atan(math.tan(math.radians(fov_deg) * 0.5) / max(source_aspect, 1e-6)))
+        v_fov_deg = max(1.0, min(179.0, v_fov_deg))
         state: dict[str, Any] = {
             "version": 1,
             "projection_model": "pinhole_rectilinear",
@@ -509,11 +520,11 @@ class RemoteProvider:
                 {
                     "id": sticker_id,
                     "asset_id": asset_id,
-                    "yaw_deg": 0.0,
-                    "pitch_deg": 0.0,
+                    "yaw_deg": float(yaw_deg),
+                    "pitch_deg": float(pitch_deg),
                     "hFOV_deg": fov_deg,
-                    "vFOV_deg": fov_deg,
-                    "rot_deg": 0.0,
+                    "vFOV_deg": v_fov_deg,
+                    "rot_deg": float(rot_deg),
                     "z_index": 1,
                 }
             ],
@@ -678,14 +689,41 @@ class RemoteProvider:
                         os.environ.get("RUNCOMFY_PANORAMA_STICKER_STATE_INPUT_NAME", "sticker_state"),
                         sticker_state,
                     )
-                    # Ensure stale asset-based state doesn't override external sticker image path.
-                    self._set_override_value(out, node_id, "state_json", "")
+                    # Compatibility fallback: some deployments still read state_json pose.
+                    # Keep sticker_state as primary, but also mirror pose into state_json.
+                    native_fallback = os.environ.get(
+                        "RUNCOMFY_PANORAMA_STICKERS_NATIVE_STATEJSON_FALLBACK",
+                        "1",
+                    ).strip().lower() in {"1", "true", "yes", "on"}
+                    if native_fallback:
+                        state_str = self._build_runcomfy_panorama_stickers_state_json(
+                            image_data_uri=self._image_data_uri(image_b64),
+                            width=width,
+                            reference_coverage=ref_cov,
+                            bg_color=bg,
+                            yaw_deg=float(placement_yaw) if placement_yaw is not None else 0.0,
+                            pitch_deg=float(placement_pitch) if placement_pitch is not None else 0.0,
+                            rot_deg=float(placement_rot) if placement_rot is not None else 0.0,
+                            h_fov_deg=float(placement_hfov) if placement_hfov is not None else None,
+                            source_width=src_w,
+                            source_height=src_h,
+                        )
+                        self._set_override_value(out, node_id, "state_json", state_str)
+                    else:
+                        # Ensure stale asset-based state doesn't override external sticker image path.
+                        self._set_override_value(out, node_id, "state_json", "")
                 else:
                     state_str = self._build_runcomfy_panorama_stickers_state_json(
                         image_data_uri=image_ref,
                         width=width,
                         reference_coverage=ref_cov,
                         bg_color=bg,
+                        yaw_deg=float(placement_yaw) if placement_yaw is not None else 0.0,
+                        pitch_deg=float(placement_pitch) if placement_pitch is not None else 0.0,
+                        rot_deg=float(placement_rot) if placement_rot is not None else 0.0,
+                        h_fov_deg=float(placement_hfov) if placement_hfov is not None else None,
+                        source_width=src_w,
+                        source_height=src_h,
                     )
                     self._set_override_value(out, node_id, "state_json", state_str)
 

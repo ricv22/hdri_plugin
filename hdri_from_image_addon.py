@@ -970,7 +970,6 @@ def _refresh_placement_preview(settings, context=None, source_rgb: np.ndarray | 
     )
     img = _ensure_placement_preview_image(int(rgb.shape[1]), int(rgb.shape[0]))
     _update_preview_image_pixels(img, rgb)
-    settings.placement_preview_image = img
 
 
 def _update_placement_controls(self, context):
@@ -1374,10 +1373,6 @@ class HDRI_API_Settings(PropertyGroup):
         description="Last async job error message",
         default="",
     )
-    placement_preview_image: PointerProperty(
-        name="Placement Preview",
-        type=bpy.types.Image,
-    )
     tokens_remaining: IntProperty(
         name="Tokens Remaining",
         description="Latest token balance returned by /v1/account (-1 means unknown)",
@@ -1447,6 +1442,21 @@ class HDRI_OT_open_placement_editor(Operator):
     _last_mouse = (0, 0)
     _canvas_rect = (0, 0, 0, 0)
     _start_values = None
+    _request_close = False
+    _active_instance = None
+
+    @classmethod
+    def request_close(cls) -> bool:
+        inst = cls._active_instance
+        if inst is None:
+            return False
+        inst._request_close = True
+        if inst._area is not None:
+            try:
+                inst._area.tag_redraw()
+            except Exception:
+                pass
+        return True
 
     def _cleanup(self, context):
         if self._timer is not None:
@@ -1466,6 +1476,8 @@ class HDRI_OT_open_placement_editor(Operator):
                 self._area.tag_redraw()
             except Exception:
                 pass
+        if HDRI_OT_open_placement_editor._active_instance is self:
+            HDRI_OT_open_placement_editor._active_instance = None
 
     @staticmethod
     def _canvas_for_region(region) -> tuple[int, int, int, int]:
@@ -1500,7 +1512,7 @@ class HDRI_OT_open_placement_editor(Operator):
 
         x, y, w, h = self._canvas_for_region(region)
         self._canvas_rect = (x, y, w, h)
-        img = settings.placement_preview_image
+        img = bpy.data.images.get(_PLACEMENT_PREVIEW_IMAGE_NAME)
 
         if img is not None:
             try:
@@ -1550,6 +1562,10 @@ class HDRI_OT_open_placement_editor(Operator):
         gpu.state.blend_set("NONE")
 
     def invoke(self, context, event):
+        if HDRI_OT_open_placement_editor._active_instance is not None:
+            self.report({"INFO"}, "Placement editor is already open. Use Close Editor to exit it.")
+            return {"CANCELLED"}
+
         settings = context.scene.hdri_api_settings
         src_path = bpy.path.abspath(settings.input_image_path)
         if not src_path or not os.path.exists(src_path):
@@ -1562,6 +1578,7 @@ class HDRI_OT_open_placement_editor(Operator):
             return {"CANCELLED"}
 
         self._source_rgb = source_rgb
+        self._request_close = False
         self._start_values = (
             float(settings.placement_yaw_deg),
             float(settings.placement_pitch_deg),
@@ -1571,6 +1588,7 @@ class HDRI_OT_open_placement_editor(Operator):
             float(settings.placement_hfov_deg),
         )
         self._area = context.area
+        HDRI_OT_open_placement_editor._active_instance = self
         self._draw_handle = bpy.types.SpaceView3D.draw_handler_add(self._draw_callback, (), "WINDOW", "POST_PIXEL")
         self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
         self._render_preview(context)
@@ -1580,7 +1598,11 @@ class HDRI_OT_open_placement_editor(Operator):
     def modal(self, context, event):
         settings = context.scene.hdri_api_settings
 
-        if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
+        if self._request_close:
+            self._cleanup(context)
+            return {"FINISHED"}
+
+        if event.type in {"ESC", "RIGHTMOUSE"} and event.value in {"PRESS", "RELEASE", "CLICK"}:
             (
                 settings.placement_yaw_deg,
                 settings.placement_pitch_deg,
@@ -1592,6 +1614,10 @@ class HDRI_OT_open_placement_editor(Operator):
             self._render_preview(context)
             self._cleanup(context)
             return {"CANCELLED"}
+
+        if event.type in {"SPACE", "Q"} and event.value == "PRESS":
+            self._cleanup(context)
+            return {"FINISHED"}
 
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
             self._cleanup(context)
@@ -1640,6 +1666,20 @@ class HDRI_OT_open_placement_editor(Operator):
             return {"RUNNING_MODAL"}
 
         return {"PASS_THROUGH"}
+
+
+class HDRI_OT_close_placement_editor(Operator):
+    bl_idname = "hdri.close_placement_editor"
+    bl_label = "Close placement editor"
+    bl_description = "Close the active placement editor overlay"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        if HDRI_OT_open_placement_editor.request_close():
+            self.report({"INFO"}, "Closing placement editor.")
+            return {"FINISHED"}
+        self.report({"INFO"}, "Placement editor is not open.")
+        return {"CANCELLED"}
 
 
 class HDRI_OT_apply_from_api(Operator):
@@ -2074,6 +2114,20 @@ class HDRI_PT_panel(Panel):
 
         col = layout.column(align=True)
         col.prop(s, "input_image_path")
+        col.label(text="Placement")
+        col.prop(s, "placement_coverage")
+        row_place = col.row(align=True)
+        row_place.prop(s, "placement_yaw_deg")
+        row_place.prop(s, "placement_pitch_deg")
+        col.prop(s, "placement_rotation_deg")
+        col.prop(s, "placement_hfov_deg")
+        row_editor = col.row(align=True)
+        row_editor.operator(HDRI_OT_open_placement_editor.bl_idname, text="Open Editor", icon="ORIENTATION_VIEW")
+        row_editor.operator(HDRI_OT_close_placement_editor.bl_idname, text="Close Editor", icon="X")
+        preview_img = bpy.data.images.get(_PLACEMENT_PREVIEW_IMAGE_NAME)
+        if preview_img is not None:
+            col.template_preview(preview_img, show_buttons=False)
+        col.separator()
         col.prop(s, "library_folder")
         library_folder = bpy.path.abspath((s.library_folder or "").strip()) if s.library_folder else ""
         if library_folder:
@@ -2190,24 +2244,12 @@ class HDRI_PT_panel(Panel):
         box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")
         box.label(text="Local mode: run API server + worker + ComfyUI before Generate.", icon="INFO")
         col2 = box.column(align=True)
-        if s.placement_preview_image is None and (s.input_image_path or "").strip():
-            _refresh_placement_preview(s, context=context)
         col2.prop(s, "panorama_prompt")
         col2.prop(s, "panorama_negative_prompt")
         row = col2.row(align=True)
         row.prop(s, "panorama_seed")
         row.prop(s, "panorama_strength")
         col2.prop(s, "erp_layout_mode")
-        col2.label(text="Placement")
-        col2.prop(s, "placement_coverage")
-        row_place = col2.row(align=True)
-        row_place.prop(s, "placement_yaw_deg")
-        row_place.prop(s, "placement_pitch_deg")
-        col2.prop(s, "placement_rotation_deg")
-        col2.prop(s, "placement_hfov_deg")
-        col2.operator(HDRI_OT_open_placement_editor.bl_idname, icon="ORIENTATION_VIEW")
-        if s.placement_preview_image is not None:
-            col2.template_preview(s.placement_preview_image, show_buttons=False)
         col2.prop(s, "seam_fix")
         row2 = col2.row(align=True)
         row2.prop(s, "erp_canvas_width")
@@ -2229,6 +2271,7 @@ classes = (
     HDRI_API_Settings,
     HDRI_OT_refresh_server_config,
     HDRI_OT_open_placement_editor,
+    HDRI_OT_close_placement_editor,
     HDRI_OT_apply_from_api,
     HDRI_OT_apply_library_hdri,
     HDRI_OT_cancel_job,
