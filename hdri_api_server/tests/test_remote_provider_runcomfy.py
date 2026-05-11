@@ -121,6 +121,42 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
             )
         self.assertEqual(out["11"]["inputs"]["image"], "data:image/jpeg;base64,YWJj")
         self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
+        self.assertEqual(out["56"]["inputs"]["state_json"], "")
+        sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
+        self.assertEqual(sticker_state["kind"], "pano_sticker_state")
+        self.assertEqual(sticker_state["version"], 1)
+        self.assertEqual(sticker_state["pose"]["yaw_deg"], 12.0)
+        self.assertEqual(sticker_state["pose"]["pitch_deg"], -6.0)
+        self.assertEqual(sticker_state["pose"]["roll_deg"], 18.0)
+        self.assertEqual(sticker_state["pose"]["hFOV_deg"], 72.0)
+        self.assertNotIn("vFOV_deg", sticker_state["pose"])
+
+    def test_panorama_stickers_native_mode_with_legacy_state_fallback(self) -> None:
+        env = {
+            "RUNCOMFY_IMAGE_NODE_IDS": "11",
+            "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+            "RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE": "1",
+            "RUNCOMFY_PANORAMA_STICKERS_NATIVE_STATEJSON_FALLBACK": "1",
+            "RUNCOMFY_INPUT_IMAGE_TRANSPORT": "data_uri",
+            "RUNCOMFY_DEFAULT_REFERENCE_COVERAGE": "0.6",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            out = self.provider._build_runcomfy_overrides(
+                image_b64="YWJj",
+                width=2048,
+                height=1024,
+                scene_mode="outdoor",
+                quality_mode="balanced",
+                overrides={
+                    "placement_coverage": 0.5,
+                    "placement_yaw_deg": 12.0,
+                    "placement_pitch_deg": -6.0,
+                    "placement_rotation_deg": 18.0,
+                    "placement_hfov_deg": 72.0,
+                },
+            )
+        self.assertEqual(out["11"]["inputs"]["image"], "data:image/jpeg;base64,YWJj")
+        self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
         sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
         self.assertEqual(sticker_state["kind"], "pano_sticker_state")
         self.assertEqual(sticker_state["version"], 1)
