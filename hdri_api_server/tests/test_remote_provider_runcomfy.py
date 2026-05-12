@@ -170,6 +170,35 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(legacy_state["stickers"][0]["pitch_deg"], -6.0)
         self.assertEqual(legacy_state["stickers"][0]["rot_deg"], 18.0)
 
+    def test_select_runcomfy_image_url_skips_panorama_stickers_preview(self) -> None:
+        result_data = {
+            "outputs": {
+                "56": {
+                    "images": [
+                        {
+                            "type": "temp",
+                            "url": "https://example.com/temp/sticker_preview.png",
+                        }
+                    ]
+                },
+                "66": {
+                    "images": [
+                        {
+                            "type": "output",
+                            "url": "https://example.com/output/final_pano.png",
+                        }
+                    ]
+                },
+            }
+        }
+        env = {
+            "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            url, node_id = self.provider._select_runcomfy_image_url(result_data)
+        self.assertEqual(url, "https://example.com/output/final_pano.png")
+        self.assertEqual(node_id, "66")
+
 
 if __name__ == "__main__":
     unittest.main()

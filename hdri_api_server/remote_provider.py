@@ -169,6 +169,12 @@ class RemoteProvider:
             node_id = node_id.strip()
             if node_id:
                 skip.add(node_id)
+        # PanoramaStickers nodes often expose preview/temp images (green canvas + sticker).
+        # Those are control intermediates, not the final outpainted result.
+        for node_id in os.environ.get("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS", "").split(","):
+            node_id = node_id.strip()
+            if node_id:
+                skip.add(node_id)
 
         def _image_entries_from_node(node_val: dict[str, Any]) -> list[dict[str, Any]]:
             entries: list[dict[str, Any]] = []
