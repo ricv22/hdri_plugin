@@ -490,6 +490,11 @@ class RemoteProvider:
             else RemoteProvider._runcomfy_coverage_to_fov_deg(reference_coverage)
         )
         resolved_hfov = max(1.0, min(179.0, resolved_hfov))
+        resolved_vfov = math.degrees(
+            2.0 * math.atan(math.tan(math.radians(resolved_hfov) * 0.5) / max(source_aspect, 1e-6))
+        )
+        resolved_vfov = max(1.0, min(179.0, resolved_vfov))
+        resolved_rot = float(0.0 if rot_deg is None else rot_deg)
 
         payload: dict[str, Any] = {
             "kind": "pano_sticker_state",
@@ -497,8 +502,11 @@ class RemoteProvider:
             "pose": {
                 "yaw_deg": float(0.0 if yaw_deg is None else yaw_deg),
                 "pitch_deg": float(default_pitch if pitch_deg is None else pitch_deg),
-                "roll_deg": float(0.0 if rot_deg is None else rot_deg),
+                # PanoramaStickers naming uses rot_deg; keep roll_deg alias for compatibility.
+                "rot_deg": resolved_rot,
+                "roll_deg": resolved_rot,
                 "hFOV_deg": float(resolved_hfov),
+                "vFOV_deg": float(resolved_vfov),
             },
             "source_aspect": source_aspect,
         }
