@@ -1559,6 +1559,15 @@ class HDRI_OT_open_placement_editor(Operator):
         )
         outline.uniform_float("color", (1.0, 1.0, 1.0, 0.35))
         cross.draw(outline)
+
+        # Ground-level guide (horizon / pitch=0) to help manual alignment.
+        horizon = batch_for_shader(
+            outline,
+            "LINES",
+            {"pos": ((x, cy), (x + w, cy))},
+        )
+        outline.uniform_float("color", (1.0, 0.85, 0.25, 0.95))
+        horizon.draw(outline)
         gpu.state.blend_set("NONE")
 
     def invoke(self, context, event):

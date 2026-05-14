@@ -62,6 +62,33 @@ class RemoteProvider:
             return 120.0
 
     @staticmethod
+    def _env_truthy(name: str, default: str = "0") -> bool:
+        return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _write_runcomfy_debug_payload(payload: dict[str, Any]) -> None:
+        """Optionally persist the exact inference payload for placement debugging."""
+        if not RemoteProvider._env_truthy("RUNCOMFY_DEBUG_OVERRIDES", "0"):
+            return
+        data_dir = os.environ.get("HDRI_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+        os.makedirs(data_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        debug_path = os.environ.get(
+            "RUNCOMFY_DEBUG_OVERRIDES_PATH",
+            os.path.join(data_dir, f"runcomfy_payload_{ts}.json"),
+        ).strip()
+        try:
+            with open(debug_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=True)
+            latest_path = os.path.join(data_dir, "runcomfy_payload_latest.json")
+            with open(latest_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=True)
+            print(f"[runcomfy-debug] wrote exact payload to: {debug_path}")
+            print(f"[runcomfy-debug] updated latest payload at: {latest_path}")
+        except Exception as e:
+            print(f"[runcomfy-debug] failed to write payload dump: {e}")
+
+    @staticmethod
     def _http_json(url: str, method: str, payload: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=body, method=method)
@@ -854,6 +881,7 @@ class RemoteProvider:
                 quality_mode=quality_mode,
                 overrides=overrides,
             )
+            self._write_runcomfy_debug_payload(payload)
             data = self._http_json(url, "POST", payload=payload, headers=self._runcomfy_headers())
             request_id = str(data.get("request_id", "")).strip()
             if not request_id:
