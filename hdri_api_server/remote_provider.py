@@ -756,7 +756,7 @@ class RemoteProvider:
                     # Keep sticker_state as primary, but also mirror pose into state_json.
                     native_fallback = os.environ.get(
                         "RUNCOMFY_PANORAMA_STICKERS_NATIVE_STATEJSON_FALLBACK",
-                        "0",
+                        "1" if placement_requested else "0",
                     ).strip().lower() in {"1", "true", "yes", "on"}
                     if native_fallback:
                         state_str = self._build_runcomfy_panorama_stickers_state_json(

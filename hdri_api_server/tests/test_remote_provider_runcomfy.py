@@ -121,7 +121,6 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
             )
         self.assertEqual(out["11"]["inputs"]["image"], "data:image/jpeg;base64,YWJj")
         self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
-        self.assertEqual(out["56"]["inputs"]["state_json"], "")
         sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
         self.assertEqual(sticker_state["kind"], "pano_sticker_state")
         self.assertEqual(sticker_state["version"], 1)
@@ -130,6 +129,10 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(sticker_state["pose"]["roll_deg"], 18.0)
         self.assertEqual(sticker_state["pose"]["hFOV_deg"], 72.0)
         self.assertNotIn("vFOV_deg", sticker_state["pose"])
+        legacy_state = json.loads(out["56"]["inputs"]["state_json"])
+        self.assertEqual(legacy_state["stickers"][0]["yaw_deg"], 12.0)
+        self.assertEqual(legacy_state["stickers"][0]["pitch_deg"], -6.0)
+        self.assertEqual(legacy_state["stickers"][0]["rot_deg"], 18.0)
 
     def test_panorama_stickers_native_mode_with_legacy_state_fallback(self) -> None:
         env = {
@@ -261,7 +264,9 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                 },
             )
         self.assertIn("sticker_state", out["56"]["inputs"])
-        self.assertEqual(out["56"]["inputs"]["state_json"], "")
+        legacy_state = json.loads(out["56"]["inputs"]["state_json"])
+        self.assertEqual(legacy_state["stickers"][0]["yaw_deg"], 25.0)
+        self.assertEqual(legacy_state["stickers"][0]["pitch_deg"], -8.0)
 
     def test_placement_prefers_workflow_sticker_image_node_over_env_image_nodes(self) -> None:
         workflow_api_json = {
