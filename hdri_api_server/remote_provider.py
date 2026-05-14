@@ -408,6 +408,30 @@ class RemoteProvider:
         return [x.strip() for x in raw.split(",") if x.strip()]
 
     @staticmethod
+    def _workflow_nodes_with_class(workflow_api_json: dict[str, Any] | None, class_type: str) -> list[str]:
+        if not isinstance(workflow_api_json, dict):
+            return []
+        out: list[str] = []
+        for node_id, node_val in workflow_api_json.items():
+            if not isinstance(node_val, dict):
+                continue
+            if str(node_val.get("class_type", "")).strip() == class_type:
+                out.append(str(node_id))
+        return out
+
+    @staticmethod
+    def _dedupe_node_ids(node_ids: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for node_id in node_ids:
+            node_id = str(node_id).strip()
+            if not node_id or node_id in seen:
+                continue
+            seen.add(node_id)
+            out.append(node_id)
+        return out
+
+    @staticmethod
     def _set_override_value(dst: dict[str, Any], node_id: str, input_name: str, value: Any) -> None:
         node = dst.setdefault(str(node_id), {})
         inputs = node.setdefault("inputs", {})
@@ -553,6 +577,7 @@ class RemoteProvider:
         scene_mode: str,
         quality_mode: str,
         overrides: dict[str, Any] | None,
+        workflow_api_json: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         out: dict[str, Any] = {}
 
@@ -588,13 +613,43 @@ class RemoteProvider:
         placement_pitch = generic.get("placement_pitch_deg")
         placement_rot = generic.get("placement_rotation_deg")
         placement_hfov = generic.get("placement_hfov_deg")
+        placement_requested = any(v is not None for v in (placement_yaw, placement_pitch, placement_rot, placement_hfov))
+
+        ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
+        if not ps_ids:
+            ps_ids = self._workflow_nodes_with_class(workflow_api_json, "PanoramaStickers")
+        ps_ids = self._dedupe_node_ids(ps_ids)
+
+        sticker_image_node_ids: list[str] = []
+        if isinstance(workflow_api_json, dict):
+            for ps_id in ps_ids:
+                node_val = workflow_api_json.get(ps_id)
+                if not isinstance(node_val, dict):
+                    continue
+                inputs = node_val.get("inputs")
+                if not isinstance(inputs, dict):
+                    continue
+                sticker_image_ref = inputs.get("sticker_image")
+                if isinstance(sticker_image_ref, list) and sticker_image_ref:
+                    sticker_image_node_ids.append(str(sticker_image_ref[0]))
+        sticker_image_node_ids = self._dedupe_node_ids(sticker_image_node_ids)
 
         load_image_node_ids = self._parse_node_ids("RUNCOMFY_IMAGE_NODE_IDS")
-        ps_ids = self._parse_node_ids("RUNCOMFY_PANORAMA_STICKERS_NODE_IDS")
+        if not load_image_node_ids and sticker_image_node_ids:
+            load_image_node_ids = list(sticker_image_node_ids)
+        load_image_node_ids = self._dedupe_node_ids(load_image_node_ids)
+        target_image_node_ids = (
+            list(sticker_image_node_ids)
+            if (placement_requested and sticker_image_node_ids)
+            else list(load_image_node_ids)
+        )
         use_native_sticker_inputs = (
             bool(ps_ids)
-            and os.environ.get("RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE", "1").strip().lower()
-            in {"1", "true", "yes", "on"}
+            and (
+                placement_requested
+                or os.environ.get("RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE", "1").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
         )
 
         # For the panorama outpainting workflow, the LoadImage node receives a
@@ -606,11 +661,13 @@ class RemoteProvider:
         # wires LoadImage->PanoramaStickers.sticker_image, prefer native
         # PanoramaStickers projection driven by sticker_state.
         compose_erp = (
+            not placement_requested
+            and
             not use_native_sticker_inputs
             and os.environ.get("RUNCOMFY_LOAD_IMAGE_COMPOSE_ERP", "1").strip().lower() in {"1", "true", "yes", "on"}
         )
         image_ref: str | None = None
-        if load_image_node_ids and compose_erp:
+        if target_image_node_ids and compose_erp:
             image_ref = self._signed_erp_control_url(
                 image_b64,
                 width=width,
@@ -621,7 +678,7 @@ class RemoteProvider:
         if image_ref is None:
             image_ref = self._signed_input_image_url(image_b64) or self._image_data_uri(image_b64)
 
-        for node_id in load_image_node_ids:
+        for node_id in target_image_node_ids:
             self._set_override_value(out, node_id, os.environ.get("RUNCOMFY_IMAGE_INPUT_NAME", "image"), image_ref)
 
         # Prompt nodes
@@ -757,6 +814,7 @@ class RemoteProvider:
             scene_mode=scene_mode,
             quality_mode=quality_mode,
             overrides=overrides,
+            workflow_api_json=payload.get("workflow_api_json") if isinstance(payload.get("workflow_api_json"), dict) else None,
         )
         if runcomfy_overrides:
             payload["overrides"] = runcomfy_overrides
