@@ -48,6 +48,18 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(out["16"]["inputs"]["width"], 2048)
         self.assertEqual(out["16"]["inputs"]["height"], 1024)
 
+    def test_coverage_to_hfov_mapping_is_camera_like(self) -> None:
+        # New mapping target:
+        #   0.15 -> 35 deg
+        #   0.60 -> ~73.57 deg
+        #   0.85 -> 95 deg
+        self.assertAlmostEqual(self.provider._runcomfy_coverage_to_fov_deg(0.15), 35.0, places=3)
+        self.assertAlmostEqual(self.provider._runcomfy_coverage_to_fov_deg(0.60), 73.5714285714, places=3)
+        self.assertAlmostEqual(self.provider._runcomfy_coverage_to_fov_deg(0.85), 95.0, places=3)
+        # Clamp behavior
+        self.assertAlmostEqual(self.provider._runcomfy_coverage_to_fov_deg(0.0), 35.0, places=3)
+        self.assertAlmostEqual(self.provider._runcomfy_coverage_to_fov_deg(1.0), 95.0, places=3)
+
     def test_panorama_stickers_nodes_get_state_json_and_preset(self) -> None:
         env = {
             "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
@@ -83,6 +95,8 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(out["31"]["inputs"]["seed"], 7)
         self.assertEqual(out["31"]["inputs"]["denoise"], 0.55)
         self.assertEqual(out["31"]["inputs"]["steps"], 24)
+        # 0.5 coverage should now be significantly narrower than old 106.25 deg.
+        self.assertAlmostEqual(state["stickers"][0]["hFOV_deg"], 65.0, places=3)
 
     def test_runcomfy_style_overrides_passthrough(self) -> None:
         src = {"5": {"inputs": {"image": "data:image/png;base64,abcd"}}}
@@ -134,6 +148,28 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(legacy_state["stickers"][0]["yaw_deg"], 12.0)
         self.assertEqual(legacy_state["stickers"][0]["pitch_deg"], -6.0)
         self.assertEqual(legacy_state["stickers"][0]["rot_deg"], 18.0)
+
+    def test_native_sticker_state_uses_new_coverage_mapping_when_hfov_unset(self) -> None:
+        env = {
+            "RUNCOMFY_IMAGE_NODE_IDS": "11",
+            "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+            "RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE": "1",
+            "RUNCOMFY_INPUT_IMAGE_TRANSPORT": "data_uri",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            out = self.provider._build_runcomfy_overrides(
+                image_b64="YWJj",
+                width=2048,
+                height=1024,
+                scene_mode="auto",
+                quality_mode="balanced",
+                overrides={
+                    "placement_coverage": 0.6,
+                    "placement_yaw_deg": 10.0,
+                },
+            )
+        sticker_state = json.loads(out["56"]["inputs"]["sticker_state"])
+        self.assertAlmostEqual(sticker_state["pose"]["hFOV_deg"], 73.5714285714, places=3)
 
     def test_panorama_stickers_native_mode_with_legacy_state_fallback(self) -> None:
         env = {

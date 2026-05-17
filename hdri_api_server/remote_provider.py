@@ -474,9 +474,10 @@ class RemoteProvider:
 
     @staticmethod
     def _runcomfy_coverage_to_fov_deg(reference_coverage: float) -> float:
-        """Match examples/comfyui_worker.py tuning (coverage → sticker FOV)."""
-        fov = float(reference_coverage) * 212.5
-        return max(35.0, min(140.0, fov))
+        """Map placement coverage to a camera-like rectilinear sticker hFOV."""
+        cov = max(0.15, min(0.85, float(reference_coverage)))
+        t = (cov - 0.15) / 0.70
+        return 35.0 + t * 60.0
 
     @staticmethod
     def _decoded_image_size(image_b64: str) -> tuple[int, int] | None:

@@ -796,8 +796,11 @@ def _clampf(value: float, lo: float, hi: float) -> float:
 
 
 def _coverage_to_hfov_deg(coverage: float) -> float:
-    fov = float(coverage) * 212.5
-    return _clampf(fov, 35.0, 140.0)
+    # Map UI coverage to a more camera-like rectilinear hFOV:
+    # 0.15 -> 35deg, 0.85 -> 95deg.
+    cov = _clampf(float(coverage), 0.15, 0.85)
+    t = (cov - 0.15) / 0.70
+    return 35.0 + t * 60.0
 
 
 def _sample_rgb_bilinear(img: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -854,6 +857,7 @@ def _render_placement_preview_rgb(
     pitch_deg: float,
     rotation_deg: float,
     coverage: float,
+    h_fov_deg: float | None = None,
     out_w: int = 512,
     out_h: int = 256,
 ) -> np.ndarray:
@@ -866,7 +870,11 @@ def _render_placement_preview_rgb(
     src_w = max(1, int(source_rgb.shape[1]))
     source_aspect = float(src_w) / float(src_h)
 
-    hfov_deg = _coverage_to_hfov_deg(coverage)
+    hfov_deg = (
+        float(h_fov_deg)
+        if (h_fov_deg is not None and float(h_fov_deg) > 0.0)
+        else _coverage_to_hfov_deg(coverage)
+    )
     hfov = math.radians(hfov_deg)
     vfov = 2.0 * math.atan(math.tan(hfov * 0.5) / max(source_aspect, 1e-6))
     rot = math.radians(float(rotation_deg))
@@ -967,6 +975,7 @@ def _refresh_placement_preview(settings, context=None, source_rgb: np.ndarray | 
         pitch_deg=float(getattr(settings, "placement_pitch_deg", 0.0)),
         rotation_deg=float(getattr(settings, "placement_rotation_deg", 0.0)),
         coverage=float(getattr(settings, "placement_coverage", 0.6)),
+        h_fov_deg=float(getattr(settings, "placement_hfov_deg", 0.0)),
     )
     img = _ensure_placement_preview_image(int(rgb.shape[1]), int(rgb.shape[0]))
     _update_preview_image_pixels(img, rgb)
@@ -1266,7 +1275,7 @@ class HDRI_API_Settings(PropertyGroup):
     )
     placement_coverage: FloatProperty(
         name="Placement Scale",
-        description="How much panorama width the source image should occupy",
+        description="Relative on-sphere size; converted to camera hFOV (~35-95 deg) when Placement hFOV is 0",
         default=0.60,
         min=0.15,
         max=0.85,
@@ -1298,7 +1307,7 @@ class HDRI_API_Settings(PropertyGroup):
     )
     placement_hfov_deg: FloatProperty(
         name="Placement hFOV",
-        description="Optional explicit horizontal FOV override (0 = use Placement Scale)",
+        description="Explicit camera horizontal FOV override in degrees (0 = use Placement Scale mapping)",
         default=0.0,
         min=0.0,
         max=179.0,
