@@ -240,6 +240,27 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(url, "https://example.com/output/final_pano.png")
         self.assertEqual(node_id, "66")
 
+    def test_panorama_stickers_uses_deployed_4k_output_preset(self) -> None:
+        env = {
+            "RUNCOMFY_IMAGE_NODE_IDS": "11",
+            "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
+            "RUNCOMFY_PANORAMA_STICKERS_USE_EXTERNAL_IMAGE": "1",
+            "RUNCOMFY_INPUT_IMAGE_TRANSPORT": "data_uri",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            out = self.provider._build_runcomfy_overrides(
+                image_b64="YWJj",
+                width=4096,
+                height=2048,
+                scene_mode="auto",
+                quality_mode="balanced",
+                overrides={
+                    "placement_coverage": 0.5,
+                    "placement_yaw_deg": 12.0,
+                },
+            )
+        self.assertEqual(out["56"]["inputs"]["output_preset"], "4096")
+
     def test_auto_detects_sticker_and_loadimage_nodes_from_workflow_json(self) -> None:
         workflow_api_json = {
             "11": {

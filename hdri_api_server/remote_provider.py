@@ -480,6 +480,12 @@ class RemoteProvider:
         return 35.0 + t * 60.0
 
     @staticmethod
+    def _runcomfy_output_preset(width: int, height: int) -> str:
+        """Return the deployed PanoramaStickers preset value."""
+        _ = height
+        return str(int(width))
+
+    @staticmethod
     def _decoded_image_size(image_b64: str) -> tuple[int, int] | None:
         try:
             raw = image_b64.strip()
@@ -764,7 +770,7 @@ class RemoteProvider:
         # Legacy path (state_json/assets) is retained for backward compatibility.
         if ps_ids:
             bg = os.environ.get("RUNCOMFY_PANORAMA_BG_COLOR", "#00ff00").strip() or "#00ff00"
-            preset = str(width)
+            preset = self._runcomfy_output_preset(width, height)
             source_size = self._decoded_image_size(image_b64)
             src_w = source_size[0] if source_size is not None else None
             src_h = source_size[1] if source_size is not None else None
@@ -956,6 +962,15 @@ class RemoteProvider:
 
             image_url, source_node = self._select_runcomfy_image_url(result_data)
             if not image_url:
+                # If RunComfy returned a normal outputs map but no acceptable non-skipped
+                # output, do not fall back to arbitrary preview/control URLs. That can
+                # accidentally apply PanoramaStickers' green conditioning image.
+                if isinstance(result_data.get("outputs"), dict):
+                    raise RuntimeError(
+                        "RunComfy result did not include a final output image from a non-skipped node. "
+                        "Check RUNCOMFY_OUTPUT_NODE_IDS points to the final SaveImage node and that the "
+                        f"workflow supports {width}x{height}."
+                    )
                 candidates = RemoteProvider._collect_https_urls(result_data)
                 image_url = RemoteProvider._pick_runcomfy_output_image_url(candidates)
             if not image_url:

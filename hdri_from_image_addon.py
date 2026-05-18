@@ -1884,8 +1884,11 @@ class HDRI_OT_apply_from_api(Operator):
         if s.panorama_strength >= 0.0:
             payload["panorama_strength"] = float(s.panorama_strength)
         payload["erp_layout_mode"] = s.erp_layout_mode
-        payload["reference_coverage"] = float(s.placement_coverage)
-        payload["placement_coverage"] = float(s.placement_coverage)
+        # Clamp + round coverage to avoid float32 spillover (e.g. 0.8500000238)
+        # tripping server-side <= 0.85 validation.
+        coverage_send = round(_clampf(float(s.placement_coverage), 0.15, 0.85), 6)
+        payload["reference_coverage"] = coverage_send
+        payload["placement_coverage"] = coverage_send
         payload["placement_yaw_deg"] = float(s.placement_yaw_deg)
         payload["placement_pitch_deg"] = float(s.placement_pitch_deg)
         payload["placement_rotation_deg"] = float(s.placement_rotation_deg)
