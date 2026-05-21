@@ -38,11 +38,11 @@ _load_local_env()
 import numpy as np
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from PIL import Image
 
 from accounting import refund_job_if_needed, refund_tokens, reserve_tokens_or_raise, token_cost_for_quality
-from ai_hdr import reconstruct_ai_hdr, reconstruct_heuristic_hdr
+from ai_hdr import reconstruct_heuristic_hdr
 from auth import (
     auth_header_value,
     authenticate_account,
@@ -172,10 +172,18 @@ class HdriRequest(BaseModel):
         description="Optional ERP control canvas height; must be 1/2 erp_canvas_width.",
     )
 
-    hdr_reconstruction_mode: Literal["heuristic", "ai_fast", "comfyui_hdr", "off"] | None = Field(
+    hdr_reconstruction_mode: Literal["heuristic", "comfyui_hdr", "off"] | None = Field(
         None,
-        description="HDR stage mode. heuristic=legacy curve, ai_fast=neural reconstruction, comfyui_hdr=worker-driven HDR restore, off=flat linear export.",
+        description="HDR stage mode. comfyui_hdr=GMNet via local HDR worker, heuristic=legacy curve, off=flat linear export.",
     )
+
+    @field_validator("hdr_reconstruction_mode", mode="before")
+    @classmethod
+    def _legacy_ai_fast_hdr_mode(cls, value: object) -> object:
+        if isinstance(value, str) and value.strip().lower() == "ai_fast":
+            return "heuristic"
+        return value
+
     heuristic_hdr_lift: bool | None = Field(
         None,
         description="Legacy compatibility toggle. If hdr_reconstruction_mode is omitted, True→heuristic, False→off.",
@@ -184,11 +192,7 @@ class HdriRequest(BaseModel):
         0.0,
         ge=-4.0,
         le=4.0,
-        description="Exposure bias in EV applied after HDR reconstruction.",
-    )
-    hdr_model_name: str | None = Field(
-        None,
-        description="Optional AI HDR backend/model selector (e.g. embedded, torchscript).",
+        description="Exposure bias in EV applied after HDR reconstruction (comfyui_hdr and heuristic).",
     )
     # Optional baked controls if the client wants the generated file itself adjusted.
     hue_shift: float = Field(0.0, ge=-1.0, le=1.0, description="Hue shift in normalized turns (-1..1).")
@@ -615,25 +619,12 @@ def _generate_hdri(
         try:
             rgb_hdr = _run_comfyui_hdr_restore(req, rgb)
         except Exception as e:
-            failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
-            print(f"ComfyUI HDR restore failed ({e}); failover={failover}")
-            if failover == "off":
-                rgb_hdr = np.clip(rgb_lin.astype(np.float32) * 2.5, 0.0, None)
-                hdr_mode = "off"
-            else:
-                rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
-                hdr_mode = "heuristic"
-    elif hdr_mode == "ai_fast":
-        try:
-            rgb_hdr = reconstruct_ai_hdr(
-                rgb_lin,
-                quality_mode=req.quality_mode,
-                exposure_bias=req.hdr_exposure_bias,
-                model_name=req.hdr_model_name,
+            failover = _hdr_failover_mode()
+            print(
+                f"[hdr] ComfyUI HDR worker unreachable ({e}); "
+                f"start examples/comfyui_worker.py on HDR_HTTP_URL or set HDR mode to heuristic/off. "
+                f"failover={failover}"
             )
-        except Exception as e:
-            failover = os.environ.get("AI_HDR_FAILOVER_MODE", "heuristic").strip().lower()
-            print(f"AI HDR failed ({e}); failover={failover}")
             if failover == "off":
                 rgb_hdr = np.clip(rgb_lin.astype(np.float32) * 2.5, 0.0, None)
                 hdr_mode = "off"
@@ -642,6 +633,8 @@ def _generate_hdri(
                 hdr_mode = "heuristic"
     elif hdr_mode == "heuristic":
         rgb_hdr = _fake_hdr_lift(rgb_lin, req.quality_mode)
+        if abs(req.hdr_exposure_bias) > 1e-6:
+            rgb_hdr = rgb_hdr * (2.0 ** float(req.hdr_exposure_bias))
     else:
         # Flatter: linear radiance ~ display linear, small headroom (user can raise Exposure in Blender)
         rgb_hdr = np.clip(rgb_lin.astype(np.float32) * 2.5, 0.0, None)
@@ -665,15 +658,58 @@ def _generate_hdri(
     )
 
 
-def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "ai_fast", "comfyui_hdr", "off"]:
+def _hdr_http_url() -> str:
+    return os.environ.get("HDR_HTTP_URL", "").strip()
+
+
+def _hdr_failover_mode() -> Literal["heuristic", "off"]:
+    for key in ("HDR_FAILOVER_MODE", "AI_HDR_FAILOVER_MODE"):
+        failover = os.environ.get(key, "").strip().lower()
+        if failover == "off":
+            return "off"
+        if failover in {"heuristic", "ai_fast"}:
+            return "heuristic"
+    return "heuristic"
+
+
+def _hdr_mode_when_comfyui_unavailable() -> Literal["heuristic", "off"]:
+    """Fallback when comfyui_hdr is requested but the local HDR worker is not configured."""
+    explicit = os.environ.get("HDR_RECONSTRUCTION_FALLBACK", "").strip().lower()
+    if explicit == "off":
+        return "off"
+    if explicit in {"heuristic", "ai_fast"}:
+        return "heuristic"
+    return _hdr_failover_mode()
+
+
+def _normalize_hdr_mode(mode: str) -> str:
+    mode = mode.strip().lower()
+    if mode == "ai_fast":
+        return "heuristic"
+    if mode in {"heuristic", "comfyui_hdr", "off"}:
+        return mode
+    return "comfyui_hdr"
+
+
+def _resolve_hdr_mode(req: HdriRequest) -> Literal["heuristic", "comfyui_hdr", "off"]:
     if req.hdr_reconstruction_mode is not None:
-        return req.hdr_reconstruction_mode
-    if req.heuristic_hdr_lift is not None:
-        return "heuristic" if req.heuristic_hdr_lift else "off"
-    default_mode = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if default_mode not in {"heuristic", "ai_fast", "comfyui_hdr", "off"}:
-        return "ai_fast"
-    return default_mode  # type: ignore[return-value]
+        mode = _normalize_hdr_mode(req.hdr_reconstruction_mode)
+    elif req.heuristic_hdr_lift is not None:
+        mode = "heuristic" if req.heuristic_hdr_lift else "off"
+    else:
+        mode = _normalize_hdr_mode(
+            os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "comfyui_hdr")
+        )
+
+    if mode == "comfyui_hdr" and not _hdr_http_url():
+        fallback = _hdr_mode_when_comfyui_unavailable()
+        print(
+            "[hdr] comfyui_hdr needs a local HDR worker (HDR_HTTP_URL, e.g. "
+            "http://127.0.0.1:8001/v1/hdr_restore -> ComfyUI GMNet). "
+            f"RunComfy panorama alone does not run that step; using {fallback}."
+        )
+        return fallback  # type: ignore[return-value]
+    return mode  # type: ignore[return-value]
 
 
 def _start_stale_job_reaper() -> None:
@@ -708,14 +744,14 @@ def _config_panorama_mode() -> str:
 @app.get("/v1/config")
 def config():
     """Non-secret hints for debugging (which panorama backend is active)."""
-    hdr_default = os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "ai_fast").strip().lower()
-    if hdr_default not in {"heuristic", "ai_fast", "comfyui_hdr", "off"}:
-        hdr_default = "ai_fast"
+    hdr_default = _normalize_hdr_mode(
+        os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "comfyui_hdr")
+    )
     return {
         "panorama_mode": _config_panorama_mode(),
         "hdr_reconstruction_default": hdr_default,
-        "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
-        "hdr_http_url": os.environ.get("HDR_HTTP_URL", ""),
+        "hdr_http_url_configured": bool(_hdr_http_url()),
+        "hdr_http_url": _hdr_http_url(),
         "remote_provider": os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower(),
         "registration_enabled": os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower()
         in {"1", "true", "yes", "on"},

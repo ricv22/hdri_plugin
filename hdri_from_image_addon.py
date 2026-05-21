@@ -1423,16 +1423,15 @@ class HDRI_API_Settings(PropertyGroup):
     hdr_reconstruction_mode: EnumProperty(
         name="HDR Reconstruction",
         items=[
-            ("ai_fast", "AI Fast", "Use server-side AI HDR reconstruction (recommended)"),
-            ("comfyui_hdr", "ComfyUI HDR", "Run HDR restoration inside the ComfyUI worker workflow"),
-            ("heuristic", "Heuristic", "Legacy heuristic HDR lift"),
+            ("comfyui_hdr", "ComfyUI HDR", "GMNet via local HDR worker (:8001) — needs HDR_HTTP_URL on API host"),
+            ("heuristic", "Heuristic", "Legacy heuristic HDR lift (no ComfyUI)"),
             ("off", "Off", "Flat linear export (least boosted)"),
         ],
-        default="ai_fast",
+        default="comfyui_hdr",
     )
     hdr_exposure_bias: FloatProperty(
         name="HDR Exposure Bias (EV)",
-        description="Post-HDR exposure bias applied by server AI/heuristic stage",
+        description="Post-HDR exposure bias applied by server (comfyui_hdr and heuristic)",
         default=0.0,
         min=-4.0,
         max=4.0,

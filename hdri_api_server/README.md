@@ -69,7 +69,7 @@ Example body:
   "erp_canvas_width": null,
   "erp_canvas_height": null,
   "panorama_extra": null,
-  "hdr_reconstruction_mode": "ai_fast",
+  "hdr_reconstruction_mode": "comfyui_hdr",
   "hdr_exposure_bias": 0.0,
   "hue_shift": 0.0,
   "sat_scale": 1.0,
@@ -88,7 +88,7 @@ Response:
   "height": 1024,
   "format": "hdr_rgbe",
   "panorama_mode": "http_json",
-  "hdr_reconstruction_mode": "ai_fast"
+  "hdr_reconstruction_mode": "comfyui_hdr"
 }
 ```
 
@@ -231,23 +231,20 @@ The API applies HDR reconstruction after panorama generation and before `.hdr` e
 
 Request field:
 
-- `hdr_reconstruction_mode`: `ai_fast` | `comfyui_hdr` | `heuristic` | `off`
+- `hdr_reconstruction_mode`: `comfyui_hdr` | `heuristic` | `off`
 - `hdr_exposure_bias`: EV offset applied after HDR reconstruction
 
 Mode behavior:
 
-- `ai_fast` (recommended fallback/default): lightweight in-process AI HDR reconstruction (`ai_hdr.py`)
-- `comfyui_hdr`: call a second ComfyUI workflow to restore HDR-like highlight range after panorama generation
-- `heuristic`: conservative local lift path
+- `comfyui_hdr` (default): GMNet HDR restore via local worker (`HDR_HTTP_URL` → `comfyui_worker.py` → ComfyUI)
+- `heuristic`: conservative in-process lift path (`ai_hdr.py`)
 - `off`: flat linear export (`rgb_lin * 2.5`)
 
 Server defaults / failover env:
 
-- `HDR_RECONSTRUCTION_MODE_DEFAULT=ai_fast`
-- `AI_HDR_FAILOVER_MODE=heuristic`
-- `AI_HDR_MODEL_NAME=embedded|torchscript`
-- `AI_HDR_MODEL_PATH=...` (required when using `torchscript`)
-- `HDR_HTTP_URL=...` (used when `hdr_reconstruction_mode=comfyui_hdr`; typically `http://127.0.0.1:8001/v1/hdr_restore`)
+- `HDR_RECONSTRUCTION_MODE_DEFAULT=comfyui_hdr`
+- `HDR_FAILOVER_MODE=heuristic` (legacy alias: `AI_HDR_FAILOVER_MODE`)
+- `HDR_HTTP_URL=...` (required for `comfyui_hdr`; typically `http://127.0.0.1:8001/v1/hdr_restore`)
 - optional `HDR_HTTP_API_KEY`
 - optional `HDR_HTTP_HEADERS_JSON`
 - optional `HDR_HTTP_BODY_JSON`

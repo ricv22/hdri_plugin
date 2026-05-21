@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-import os
-from functools import lru_cache
-
 import numpy as np
-
-try:
-    import torch
-except Exception:  # pragma: no cover - optional dependency
-    torch = None  # type: ignore[assignment]
 
 
 def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
@@ -18,18 +10,6 @@ def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
     return (t * t * (3.0 - 2.0 * t)).astype(np.float32)
 
 
-def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return (1.0 / (1.0 + np.exp(-x))).astype(np.float32)
-
-
-def _quality_scale(quality_mode: str) -> float:
-    if quality_mode == "fast":
-        return 1.0
-    if quality_mode == "high":
-        return 1.18
-    return 1.08
-
-
 def _luminance_expand(
     rgb_lin: np.ndarray,
     *,
@@ -37,7 +17,6 @@ def _luminance_expand(
     mid_gain: float,
     source_gain: float,
     source_desat: float,
-    learned_bias: np.ndarray | None = None,
 ) -> np.ndarray:
     x = np.clip(rgb_lin.astype(np.float32), 0.0, None)
     lum = (0.2126 * x[..., 0] + 0.7152 * x[..., 1] + 0.0722 * x[..., 2])[..., None]
@@ -50,16 +29,10 @@ def _luminance_expand(
     mid_mask = _smoothstep(mid_ref * 0.5, mid_ref * 1.4, lum)
     source_mask = _smoothstep(hot_ref * 0.82, hot_ref * 1.18, lum)
 
-    if learned_bias is not None:
-        base_gain = base_gain + learned_bias[..., 0:1] * 0.06
-        mid_gain = mid_gain * (0.9 + learned_bias[..., 1:2] * 0.25)
-        source_gain = source_gain * (0.75 + learned_bias[..., 2:3] * 0.45)
-
     target_lum = lum * np.maximum(1.0, base_gain + mid_gain * mid_mask + source_gain * source_mask)
     chroma = x / np.maximum(lum, 1e-4)
     hdr = chroma * target_lum
 
-    # Slightly neutralize the hottest reconstructed emitters to avoid neon clipping artifacts.
     neutral = np.repeat(target_lum, 3, axis=-1)
     hdr = hdr * (1.0 - source_desat * source_mask) + neutral * (source_desat * source_mask)
     return np.clip(hdr, 0.0, None).astype(np.float32)
@@ -79,120 +52,3 @@ def reconstruct_heuristic_hdr(rgb_lin: np.ndarray, *, quality_mode: str) -> np.n
         source_gain=params[2],
         source_desat=0.10,
     )
-
-
-def _embedded_neural_hdr(rgb_lin: np.ndarray, quality_mode: str) -> np.ndarray:
-    """
-    Lightweight neural-style HDR expansion.
-    This path is dependency-free and deterministic for environments without Torch.
-    """
-    x = np.clip(rgb_lin.astype(np.float32), 0.0, None)
-    lum = (0.2126 * x[..., 0] + 0.7152 * x[..., 1] + 0.0722 * x[..., 2])[..., None]
-    log_lum = np.log1p(lum)
-    feats = np.concatenate([x, lum, log_lum, np.ones_like(lum)], axis=-1)
-
-    # Tiny MLP weights (frozen). Keeps behavior stable across machines.
-    w1 = np.array(
-        [
-            [0.85, -0.15, 0.12, 0.50, 0.08, -0.35, 0.10, 0.20],
-            [-0.12, 0.92, 0.07, 0.55, 0.10, 0.05, -0.18, 0.22],
-            [0.04, -0.08, 0.88, 0.48, 0.12, 0.16, 0.24, -0.14],
-            [0.62, 0.58, 0.54, 0.95, 0.30, 0.22, 0.12, 0.15],
-            [0.38, 0.35, 0.32, 0.72, 0.24, 0.18, 0.10, 0.12],
-            [0.05, 0.05, 0.05, 0.10, 0.02, 0.02, 0.02, 0.02],
-        ],
-        dtype=np.float32,
-    )
-    b1 = np.array([0.03, 0.03, 0.03, 0.06, 0.02, 0.01, 0.01, 0.01], dtype=np.float32)
-    h1 = np.maximum(0.0, np.tensordot(feats, w1, axes=([2], [0])) + b1)
-
-    w2 = np.array(
-        [
-            [0.52, 0.08, 0.04, 0.45, 0.20],
-            [0.08, 0.50, 0.05, 0.44, 0.20],
-            [0.06, 0.07, 0.50, 0.43, 0.20],
-            [0.40, 0.40, 0.40, 0.72, 0.25],
-            [0.18, 0.18, 0.18, 0.36, 0.12],
-            [0.10, 0.08, 0.07, 0.12, 0.08],
-            [0.05, 0.06, 0.08, 0.10, 0.07],
-            [0.07, 0.05, 0.06, 0.11, 0.07],
-        ],
-        dtype=np.float32,
-    )
-    b2 = np.array([0.06, 0.06, 0.06, 0.08, 0.03], dtype=np.float32)
-    h2 = np.maximum(0.0, np.tensordot(h1, w2, axes=([2], [0])) + b2)
-
-    if quality_mode == "fast":
-        base_gain, mid_gain, source_gain = 1.10, 0.14, 0.90
-    elif quality_mode == "high":
-        base_gain, mid_gain, source_gain = 1.22, 0.32, 2.30
-    else:
-        base_gain, mid_gain, source_gain = 1.15, 0.24, 1.55
-
-    learned_bias = _sigmoid(h2[..., :3])
-    hdr = _luminance_expand(
-        x,
-        base_gain=base_gain,
-        mid_gain=mid_gain,
-        source_gain=source_gain,
-        source_desat=0.12,
-        learned_bias=learned_bias,
-    )
-    # Keep a modest quality-dependent amplification so higher quality modes remain meaningfully punchier.
-    return np.clip(hdr * _quality_scale(quality_mode), 0.0, None).astype(np.float32)
-
-
-@lru_cache(maxsize=1)
-def _load_torchscript_model(model_path: str):
-    if torch is None:
-        raise RuntimeError("torch is not installed")
-    device_name = os.environ.get("AI_HDR_DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device_name)
-    model = torch.jit.load(model_path, map_location=device)
-    model.eval()
-    return model, device
-
-
-def _torchscript_hdr(rgb_lin: np.ndarray, quality_mode: str, model_path: str) -> np.ndarray:
-    model, device = _load_torchscript_model(model_path)
-    x = np.clip(rgb_lin.astype(np.float32), 0.0, None)
-    t = torch.from_numpy(x).permute(2, 0, 1).unsqueeze(0).to(device)
-    with torch.no_grad():
-        out = model(t)
-    if not isinstance(out, torch.Tensor):
-        raise RuntimeError("TorchScript model must return a tensor")
-    if out.ndim != 4 or out.shape[1] not in (1, 3):
-        raise RuntimeError(f"Unexpected model output shape: {tuple(out.shape)}")
-    if out.shape[1] == 1:
-        out = out.repeat(1, 3, 1, 1)
-    y = out.squeeze(0).permute(1, 2, 0).detach().cpu().numpy().astype(np.float32)
-    # Keep a quality-dependent amplification to map model output into practical Blender range.
-    return np.clip(y * _quality_scale(quality_mode), 0.0, None)
-
-
-def reconstruct_ai_hdr(
-    rgb_lin: np.ndarray,
-    *,
-    quality_mode: str,
-    exposure_bias: float = 0.0,
-    model_name: str | None = None,
-) -> np.ndarray:
-    """
-    AI HDR reconstruction entrypoint.
-
-    Backends:
-    - embedded (default): tiny neural-style model with frozen weights.
-    - torchscript: load model from AI_HDR_MODEL_PATH and run inference via Torch.
-    """
-    backend = (model_name or os.environ.get("AI_HDR_MODEL_NAME", "embedded")).strip().lower()
-    if backend == "torchscript":
-        model_path = os.environ.get("AI_HDR_MODEL_PATH", "").strip()
-        if not model_path:
-            raise RuntimeError("AI_HDR_MODEL_PATH is required for torchscript backend")
-        hdr = _torchscript_hdr(rgb_lin, quality_mode, model_path)
-    else:
-        hdr = _embedded_neural_hdr(rgb_lin, quality_mode)
-
-    if abs(exposure_bias) > 1e-6:
-        hdr = hdr * (2.0 ** float(exposure_bias))
-    return np.clip(hdr, 0.0, None).astype(np.float32)
