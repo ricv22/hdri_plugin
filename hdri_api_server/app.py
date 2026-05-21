@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+import re
 import uuid
 from typing import Any, Literal
 
@@ -35,7 +36,7 @@ def _load_local_env() -> None:
 _load_local_env()
 
 import numpy as np
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from PIL import Image
@@ -50,8 +51,19 @@ from auth import (
     hash_api_key,
     require_api_key_enabled,
 )
+from billing import (
+    checkout_completed_event,
+    create_checkout_session,
+    package_by_id,
+    register_free_tokens,
+    stripe_enabled,
+    token_packages,
+    verify_stripe_webhook,
+)
+from erp_seam import seam_fix_erp_wrap_blur
 from job_store import JobStore
 from panorama import get_mode, hdr_http_json
+from panorama_prompt import compose_panorama_prompt
 from remote_provider import RemoteProvider
 from rgbe_hdr import read_rgbe_hdr_bytes, write_rgbe_hdr
 
@@ -85,9 +97,15 @@ class HdriRequest(BaseModel):
     # Only used when PANORAMA_MODE=http_json — forwarded to your img2img / panorama worker
     panorama_prompt: str | None = Field(
         None,
-        description="Prompt for image-conditioned panorama (img2img / outpainting).",
+        description=(
+            "Optional user text merged with the required ERP outpaint base prompt "
+            "(seamless 360°, horizon level, edge match). Empty = workflow default only."
+        ),
     )
-    panorama_negative_prompt: str | None = Field(None, description="Negative prompt for the worker.")
+    panorama_negative_prompt: str | None = Field(
+        None,
+        description="Optional negative prompt override. Workflow default is used when omitted.",
+    )
     panorama_seed: int | None = Field(None, description="Optional RNG seed for the worker.")
     panorama_strength: float | None = Field(
         None,
@@ -216,6 +234,43 @@ class AccountResponse(BaseModel):
     account_id: str
     tokens_remaining: int
     api_key_required: bool
+    email: str | None = None
+    billing_enabled: bool = False
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+
+
+class RegisterResponse(BaseModel):
+    account_id: str
+    api_key: str
+    tokens_remaining: int
+    email: str
+
+
+class TokenPackageResponse(BaseModel):
+    id: str
+    label: str
+    tokens: int
+    price_cents: int
+    currency: str
+
+
+class BillingPackagesResponse(BaseModel):
+    packages: list[TokenPackageResponse]
+    stripe_enabled: bool
+
+
+class CheckoutRequest(BaseModel):
+    package_id: str = Field(..., min_length=2, max_length=64)
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class CheckoutResponse(BaseModel):
+    checkout_url: str
+    session_id: str
 
 
 class AccountCreateRequest(BaseModel):
@@ -354,6 +409,43 @@ def _apply_baked_adjustments(rgb_lin: np.ndarray, req: HdriRequest) -> np.ndarra
     return np.clip(out, 0.0, None).astype(np.float32)
 
 
+def _seam_fix_enabled(req: HdriRequest) -> bool:
+    return bool(req.seam_fix)
+
+
+def _apply_seam_fix_if_requested(rgb_lin: np.ndarray, req: HdriRequest) -> np.ndarray:
+    if not _seam_fix_enabled(req):
+        return rgb_lin
+    try:
+        band_frac = float(os.environ.get("HDRI_SEAM_FIX_BAND_FRAC", "0.04"))
+    except ValueError:
+        band_frac = 0.04
+    try:
+        blur_sigma = float(os.environ.get("HDRI_SEAM_FIX_BLUR_SIGMA", "10"))
+    except ValueError:
+        blur_sigma = 10.0
+    return seam_fix_erp_wrap_blur(rgb_lin, band_frac=band_frac, blur_sigma=blur_sigma)
+
+
+def _normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _email_to_account_id(email: str) -> str:
+    local = re.sub(r"[^a-z0-9]+", "-", _normalize_email(email).split("@", 1)[0]).strip("-")
+    if not local:
+        local = "user"
+    suffix = hashlib.sha256(_normalize_email(email).encode("utf-8")).hexdigest()[:10]
+    return f"{local[:24]}-{suffix}"
+
+
+def _validate_email(email: str) -> str:
+    norm = _normalize_email(email)
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", norm):
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+    return norm
+
+
 def _validate_output_size(width: int, height: int) -> None:
     allowed = {(1024, 512), (2048, 1024), (4096, 2048)}
     if (width, height) not in allowed:
@@ -405,10 +497,11 @@ def _require_admin_token(x_admin_token: str | None = Header(default=None)) -> No
 
 def _build_panorama_overrides(req: HdriRequest) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
-    if req.panorama_prompt is not None:
-        overrides["prompt"] = req.panorama_prompt
-    if req.panorama_negative_prompt is not None:
-        overrides["negative_prompt"] = req.panorama_negative_prompt
+    composed_prompt = compose_panorama_prompt(req.panorama_prompt)
+    if composed_prompt:
+        overrides["prompt"] = composed_prompt
+    if req.panorama_negative_prompt is not None and req.panorama_negative_prompt.strip():
+        overrides["negative_prompt"] = req.panorama_negative_prompt.strip()
     if req.panorama_seed is not None:
         overrides["seed"] = req.panorama_seed
     if req.panorama_strength is not None:
@@ -443,9 +536,11 @@ def _build_hdr_restore_overrides(req: HdriRequest) -> dict[str, Any]:
         "hdr_exposure_bias": float(req.hdr_exposure_bias),
     }
     if req.panorama_prompt is not None:
-        overrides["prompt"] = req.panorama_prompt
-    if req.panorama_negative_prompt is not None:
-        overrides["negative_prompt"] = req.panorama_negative_prompt
+        composed = compose_panorama_prompt(req.panorama_prompt)
+        if composed:
+            overrides["prompt"] = composed
+    if req.panorama_negative_prompt is not None and req.panorama_negative_prompt.strip():
+        overrides["negative_prompt"] = req.panorama_negative_prompt.strip()
     if req.panorama_seed is not None:
         overrides["seed"] = req.panorama_seed
     if req.panorama_strength is not None:
@@ -509,6 +604,7 @@ def _generate_hdri(
 
     rgb = np.asarray(im).astype(np.float32) / 255.0
     rgb_lin = _srgb_to_linear(rgb)
+    rgb_lin = _apply_seam_fix_if_requested(rgb_lin, req)
     rgb_lin = _apply_preset(rgb_lin, req.preset)
     rgb_lin = _apply_baked_adjustments(rgb_lin, req)
     hdr_mode = _resolve_hdr_mode(req)
@@ -618,6 +714,9 @@ def config():
         "ai_hdr_model_name": os.environ.get("AI_HDR_MODEL_NAME", "embedded"),
         "hdr_http_url": os.environ.get("HDR_HTTP_URL", ""),
         "remote_provider": os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower(),
+        "registration_enabled": os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower()
+        in {"1", "true", "yes", "on"},
+        "billing_enabled": stripe_enabled(),
         "note": "Panorama: PANORAMA_MODE or HDRI_REMOTE_PROVIDER=runcomfy; see README.",
     }
 
@@ -742,7 +841,91 @@ def get_account(authorization: str | None = Depends(auth_header_value)):
         account_id=row["account_id"],
         tokens_remaining=row["tokens_remaining"],
         api_key_required=require_api_key_enabled(),
+        email=row.get("email"),
+        billing_enabled=stripe_enabled(),
     )
+
+
+@app.post("/v1/register", response_model=RegisterResponse)
+def register_account(req: RegisterRequest):
+    if os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(status_code=503, detail="Self-service registration is disabled.")
+    email = _validate_email(req.email)
+    existing = _store.get_account_by_email(email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    account_id = _email_to_account_id(email)
+    if _store.get_account(account_id):
+        account_id = f"{account_id}-{uuid.uuid4().hex[:6]}"
+
+    free_tokens = register_free_tokens()
+    _store.ensure_account(account_id, initial_tokens=free_tokens, email=email)
+    raw_key = generate_api_key()
+    _store.ensure_api_key(hash_api_key(raw_key), account_id)
+    row = _store.get_account(account_id)
+    if not row:
+        raise HTTPException(status_code=500, detail="Failed to create account.")
+    return RegisterResponse(
+        account_id=account_id,
+        api_key=raw_key,
+        tokens_remaining=int(row["tokens_remaining"]),
+        email=email,
+    )
+
+
+@app.get("/v1/billing/packages", response_model=BillingPackagesResponse)
+def list_billing_packages():
+    pkgs = []
+    for pkg in token_packages():
+        pkgs.append(
+            TokenPackageResponse(
+                id=str(pkg.get("id", "")),
+                label=str(pkg.get("label", "")),
+                tokens=int(pkg.get("tokens", 0)),
+                price_cents=int(pkg.get("price_cents", 0)),
+                currency=str(pkg.get("currency", "usd")),
+            )
+        )
+    return BillingPackagesResponse(packages=pkgs, stripe_enabled=stripe_enabled())
+
+
+@app.post("/v1/billing/checkout", response_model=CheckoutResponse)
+def create_billing_checkout(req: CheckoutRequest, authorization: str | None = Depends(auth_header_value)):
+    account = authenticate_account(_store, authorization, required=True)
+    package_by_id(req.package_id)
+    base = os.environ.get("HDRI_PUBLIC_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
+    success_url = (req.success_url or os.environ.get("HDRI_CHECKOUT_SUCCESS_URL", f"{base}/docs")).strip()
+    cancel_url = (req.cancel_url or os.environ.get("HDRI_CHECKOUT_CANCEL_URL", f"{base}/docs")).strip()
+    session = create_checkout_session(
+        account_id=account["account_id"],
+        package_id=req.package_id,
+        success_url=success_url,
+        cancel_url=cancel_url,
+    )
+    return CheckoutResponse(**session)
+
+
+@app.post("/v1/billing/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("Stripe-Signature")
+    event = verify_stripe_webhook(payload, sig)
+    completed = checkout_completed_event(event)
+    if not completed:
+        return {"ok": True, "ignored": True}
+    account_id, tokens, session_id = completed
+    if not _store.record_purchase(
+        purchase_id=str(uuid.uuid4()),
+        account_id=account_id,
+        package_id=str(event.get("data", {}).get("object", {}).get("metadata", {}).get("package_id", "")),
+        tokens=tokens,
+        provider="stripe",
+        provider_ref=session_id,
+    ):
+        return {"ok": True, "duplicate": True}
+    _store.add_tokens(account_id, tokens, event_type="purchase", ref=f"purchase:{session_id}")
+    return {"ok": True}
 
 
 @app.post("/v1/accounts", response_model=AccountCreateResponse, dependencies=[Depends(_require_admin_token)])

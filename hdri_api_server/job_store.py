@@ -74,18 +74,45 @@ class JobStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS purchases (
+                    purchase_id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    package_id TEXT,
+                    tokens INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_ref TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(provider, provider_ref)
+                )
+                """
+            )
+            self._ensure_column(conn, "accounts", "email", "TEXT")
             conn.commit()
 
-    def ensure_account(self, account_id: str, *, initial_tokens: int = 0) -> None:
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        names = {str(r[1]) for r in rows}
+        if column not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+
+    def ensure_account(self, account_id: str, *, initial_tokens: int = 0, email: str | None = None) -> None:
         now = int(time.time())
+        email_norm = (email or "").strip().lower() or None
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO accounts(account_id, tokens_remaining, created_at)
-                VALUES (?, ?, ?)
+                INSERT OR IGNORE INTO accounts(account_id, tokens_remaining, created_at, email)
+                VALUES (?, ?, ?, ?)
                 """,
-                (account_id, int(initial_tokens), now),
+                (account_id, int(initial_tokens), now, email_norm),
             )
+            if email_norm:
+                conn.execute(
+                    "UPDATE accounts SET email = COALESCE(email, ?) WHERE account_id = ?",
+                    (email_norm, account_id),
+                )
             conn.commit()
 
     def ensure_api_key(self, api_key_hash: str, account_id: str) -> None:
@@ -121,7 +148,7 @@ class JobStore:
     def get_account(self, account_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT account_id, tokens_remaining FROM accounts WHERE account_id = ?",
+                "SELECT account_id, tokens_remaining, email FROM accounts WHERE account_id = ?",
                 (account_id,),
             ).fetchone()
         if not row:
@@ -129,7 +156,70 @@ class JobStore:
         return {
             "account_id": str(row["account_id"]),
             "tokens_remaining": int(row["tokens_remaining"]),
+            "email": row["email"],
         }
+
+    def get_account_by_email(self, email: str) -> dict[str, Any] | None:
+        email_norm = (email or "").strip().lower()
+        if not email_norm:
+            return None
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT account_id, tokens_remaining, email FROM accounts WHERE email = ?",
+                (email_norm,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "account_id": str(row["account_id"]),
+            "tokens_remaining": int(row["tokens_remaining"]),
+            "email": row["email"],
+        }
+
+    def add_tokens(self, account_id: str, tokens: int, *, event_type: str, ref: str) -> bool:
+        delta = int(tokens)
+        if delta <= 0:
+            return False
+        ok = self.adjust_tokens_if_possible(account_id, delta)
+        if not ok:
+            return False
+        self.record_usage_event(ref, account_id, delta, event_type)
+        return True
+
+    def record_purchase(
+        self,
+        *,
+        purchase_id: str,
+        account_id: str,
+        package_id: str | None,
+        tokens: int,
+        provider: str,
+        provider_ref: str,
+    ) -> bool:
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO purchases(
+                        purchase_id, account_id, package_id, tokens, provider, provider_ref, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        purchase_id,
+                        account_id,
+                        package_id,
+                        int(tokens),
+                        provider,
+                        provider_ref,
+                        now,
+                    ),
+                )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
 
     def adjust_tokens_if_possible(self, account_id: str, delta_tokens: int) -> bool:
         with self._lock, self._connect() as conn:

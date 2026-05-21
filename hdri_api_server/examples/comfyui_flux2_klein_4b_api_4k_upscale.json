@@ -1,0 +1,311 @@
+{
+  "6": {
+    "inputs": {
+      "text": "Fill the green spaces according to the image. Outpaint as a seamless 360 equirectangular panorama (2:1). Keep the horizon level. Match left and right edges.",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "__RUNCOMFY_INPUT_IMAGE__"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Sticker Image (API upload)"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 12345,
+      "steps": 20,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "63",
+        0
+      ],
+      "positive": [
+        "49",
+        0
+      ],
+      "negative": [
+        "55",
+        0
+      ],
+      "latent_image": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "33": {
+    "inputs": {
+      "text": "text, worst quality, blurry, ugly",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "43": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "44": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "48": {
+    "inputs": {
+      "unet_name": "flux-2-klein-base-4b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "49": {
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "52": {
+    "inputs": {
+      "pixels": [
+        "56",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "55": {
+    "inputs": {
+      "conditioning": [
+        "33",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "56": {
+    "inputs": {
+      "output_preset": "2048",
+      "bg_color": "#00ff00",
+      "state_json": "",
+      "Open Stickers Editor": null,
+      "sticker_image": [
+        "11",
+        0
+      ],
+      "sticker_state": ""
+    },
+    "class_type": "PanoramaStickers",
+    "_meta": {
+      "title": "Panorama Stickers"
+    }
+  },
+  "58": {
+    "inputs": {
+      "Open Preview": null,
+      "erp_image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PanoramaPreview",
+    "_meta": {
+      "title": "Panorama Preview"
+    }
+  },
+  "59": {
+    "inputs": {
+      "state_json": "{\"version\":1,\"projection_model\":\"pinhole_rectilinear\",\"alpha_mode\":\"straight\",\"bg_color\":\"#00ff00\",\"output_preset\":2048,\"assets\":{},\"stickers\":[],\"shots\":[{\"id\":\"sh_cd59dca1\",\"yaw_deg\":-40.26597661719347,\"pitch_deg\":9.592884798208313,\"hFOV_deg\":95.41452440211535,\"vFOV_deg\":59.634077751322096,\"roll_deg\":0,\"out_w\":1024,\"out_h\":1024,\"aspect_id\":\"1:1\"}],\"ui_settings\":{\"invert_view_x\":false,\"invert_view_y\":false,\"preview_quality\":\"balanced\"},\"active\":{\"selected_sticker_id\":null,\"selected_shot_id\":\"sh_cd59dca1\"}}",
+      "output_megapixels": 1,
+      "Open Cutout Editor": null,
+      "erp_image": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PanoramaCutout",
+    "_meta": {
+      "title": "Panorama Cutout"
+    }
+  },
+  "60": {
+    "inputs": {
+      "images": [
+        "56",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "63": {
+    "inputs": {
+      "lora_name": "flux-2-klein-4B-360-erp-outpaint-lora\\flux-2-klein-4B-360-erp-outpaint-lora_V1.safetensors",
+      "strength_model": 0.9,
+      "model": [
+        "48",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "69": {
+    "inputs": {
+      "model": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
+      "device": "cuda:0",
+      "blocks_to_swap": 24,
+      "swap_io_components": true,
+      "offload_device": "cpu",
+      "cache_model": false,
+      "attention_mode": "sdpa"
+    },
+    "class_type": "SeedVR2LoadDiTModel",
+    "_meta": {
+      "title": "SeedVR2 DiT (2k ERP -> 4k)"
+    }
+  },
+  "70": {
+    "inputs": {
+      "model": "ema_vae_fp16.safetensors",
+      "device": "cuda:0",
+      "encode_tiled": true,
+      "encode_tile_size": 1024,
+      "encode_tile_overlap": 128,
+      "decode_tiled": true,
+      "decode_tile_size": 1024,
+      "decode_tile_overlap": 128,
+      "tile_debug": "false",
+      "offload_device": "cpu",
+      "cache_model": false
+    },
+    "class_type": "SeedVR2LoadVAEModel",
+    "_meta": {
+      "title": "SeedVR2 VAE"
+    }
+  },
+  "71": {
+    "inputs": {
+      "image": [
+        "8",
+        0
+      ],
+      "dit": [
+        "69",
+        0
+      ],
+      "vae": [
+        "70",
+        0
+      ],
+      "seed": 42,
+      "resolution": 2048,
+      "max_resolution": 0,
+      "batch_size": 1,
+      "uniform_batch_size": false,
+      "temporal_overlap": 0,
+      "prepend_frames": 0,
+      "color_correction": "wavelet",
+      "input_noise_scale": 0.0,
+      "latent_noise_scale": 0.0,
+      "offload_device": "cpu",
+      "enable_debug": false
+    },
+    "class_type": "SeedVR2VideoUpscaler",
+    "_meta": {
+      "title": "SeedVR2 upscale full 2k outpaint to 4k"
+    }
+  },
+  "66": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "71",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image (4k)"
+    }
+  }
+}

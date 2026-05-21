@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photo → HDRI World (API)",
     "author": "Cursor AI",
-    "version": (0, 1, 5),
+    "version": (0, 1, 6),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > HDRI",
     "description": "Upload a photo to an API, get a 2:1 HDRI (.hdr/.exr), apply to World lighting (Cycles).",
@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
+import webbrowser
 
 import bpy
 import bpy.utils.previews
@@ -214,6 +215,69 @@ _FAKE_GROUND_OBJ = "HDRI_FakeGround"
 _FAKE_GROUND_MAT = "HDRI_FakeGround_Mat"
 
 
+def _gaussian_kernel1d(sigma: float) -> np.ndarray:
+    if sigma <= 1e-4:
+        return np.array([1.0], dtype=np.float32)
+    radius = max(1, int(round(float(sigma) * 3.0)))
+    x = np.arange(-radius, radius + 1, dtype=np.float32)
+    k = np.exp(-0.5 * (x / float(sigma)) ** 2)
+    return (k / np.sum(k)).astype(np.float32)
+
+
+def _convolve_axis(arr: np.ndarray, kernel: np.ndarray, axis: int) -> np.ndarray:
+    pad = len(kernel) // 2
+    out = np.empty_like(arr)
+    if axis == 0:
+        padded = np.pad(arr, ((pad, pad), (0, 0), (0, 0)), mode="edge")
+        for i in range(arr.shape[0]):
+            out[i] = np.tensordot(kernel, padded[i : i + len(kernel)], axes=([0], [0]))
+        return out
+    padded = np.pad(arr, ((0, 0), (pad, pad), (0, 0)), mode="wrap")
+    for i in range(arr.shape[1]):
+        out[:, i] = np.tensordot(kernel, padded[:, i : i + len(kernel)], axes=([0], [0]))
+    return out
+
+
+def _blur_rgba_array(rgba: np.ndarray, sigma: float) -> np.ndarray:
+    if sigma <= 1e-4:
+        return rgba
+    kernel = _gaussian_kernel1d(float(sigma))
+    out = _convolve_axis(rgba.astype(np.float32, copy=True), kernel, axis=0)
+    out = _convolve_axis(out, kernel, axis=1)
+    return np.clip(out, 0.0, None)
+
+
+def _blur_image_copy(source_img: bpy.types.Image, blur_amount: float) -> bpy.types.Image:
+    if source_img is None:
+        return source_img
+    amount = float(blur_amount)
+    if amount <= 1e-4:
+        return source_img
+    sigma = max(0.5, amount * 8.0)
+    blur_name = f"{source_img.name}__hdri_blur_{amount:.3f}"
+    blur_img = bpy.data.images.get(blur_name)
+    if blur_img is None:
+        blur_img = source_img.copy()
+        blur_img.name = blur_name
+    width = int(source_img.size[0])
+    height = int(source_img.size[1])
+    if width <= 0 or height <= 0:
+        return source_img
+    px = np.array(source_img.pixels[:], dtype=np.float32)
+    rgba = px.reshape(height, width, 4)
+    blurred = _blur_rgba_array(rgba, sigma)
+    if tuple(blur_img.size) != (width, height):
+        blur_img.scale(width, height)
+    blur_img.pixels[:] = blurred.reshape(-1).tolist()
+    blur_img.colorspace_settings.name = source_img.colorspace_settings.name
+    return blur_img
+
+
+def _assign_hdri_images(env_node, env_blur_node, source_img, blur_amount: float):
+    env_node.image = source_img
+    env_blur_node.image = _blur_image_copy(source_img, blur_amount)
+
+
 def _set_fake_ground_visible(visible: bool):
     obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
     if obj is None:
@@ -283,14 +347,14 @@ def _ensure_fake_ground_object(context):
 
 def _rebuild_fake_ground_material(
     img: bpy.types.Image,
+    blur_amount: float,
     mapping_src: bpy.types.Node,
     mix_src: bpy.types.Node,
     tint_mix_src: bpy.types.Node,
     hue_sat_src: bpy.types.Node,
     bg_src: bpy.types.Node,
-    lift: float,
 ):
-    """Emissive ground using the same HDRI sampling as the world (blur + hue/sat + strength)."""
+    """Emissive ground using reflected environment lookup (mirror floor)."""
     mat = bpy.data.materials.get(_FAKE_GROUND_MAT)
     if mat is None:
         mat = bpy.data.materials.new(_FAKE_GROUND_MAT)
@@ -301,27 +365,26 @@ def _rebuild_fake_ground_material(
     nodes.clear()
 
     out = nodes.new("ShaderNodeOutputMaterial")
-    out.location = (400, 0)
+    out.location = (500, 0)
 
     try:
         geom = nodes.new("ShaderNodeNewGeometry")
     except (RuntimeError, TypeError):
         geom = nodes.new("ShaderNodeGeometry")
-    geom.location = (-1400, 0)
+    geom.location = (-900, 0)
 
-    sep = nodes.new("ShaderNodeSeparateXYZ")
-    sep.location = (-1200, 0)
+    invert_in = nodes.new("ShaderNodeVectorMath")
+    invert_in.location = (-700, 0)
+    invert_in.operation = "MULTIPLY"
+    invert_in.inputs[1].default_value = (-1.0, -1.0, -1.0)
 
-    comb = nodes.new("ShaderNodeCombineXYZ")
-    comb.location = (-1000, 0)
-    comb.inputs["Z"].default_value = -float(lift)
-
-    norm = nodes.new("ShaderNodeVectorMath")
-    norm.location = (-800, 0)
-    norm.operation = "NORMALIZE"
+    reflect = nodes.new("ShaderNodeVectorMath")
+    reflect.location = (-500, 0)
+    reflect.operation = "REFLECT"
+    reflect.inputs[1].default_value = (0.0, 0.0, 1.0)
 
     mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = (-600, 0)
+    mapping.location = (-300, 0)
     rot = mapping_src.inputs["Rotation"].default_value
     loc = mapping_src.inputs["Location"].default_value
     scl = mapping_src.inputs["Scale"].default_value
@@ -336,40 +399,38 @@ def _rebuild_fake_ground_material(
     mapping.inputs["Scale"].default_value[2] = scl[2]
 
     env = nodes.new("ShaderNodeTexEnvironment")
-    env.location = (-400, 80)
+    env.location = (-100, 80)
     env.image = img
 
     env_blur = nodes.new("ShaderNodeTexEnvironment")
-    env_blur.location = (-400, -120)
-    env_blur.image = img
+    env_blur.location = (-100, -120)
+    env_blur.image = _blur_image_copy(img, blur_amount)
     env_blur.label = "HDRI Blur Source"
 
     mix = nodes.new("ShaderNodeMixRGB")
-    mix.location = (0, -40)
+    mix.location = (120, -40)
     mix.blend_type = "MIX"
     mix.inputs["Fac"].default_value = mix_src.inputs["Fac"].default_value
 
     hue_sat = nodes.new("ShaderNodeHueSaturation")
-    hue_sat.location = (200, -40)
+    hue_sat.location = (300, -40)
     hue_sat.inputs["Hue"].default_value = hue_sat_src.inputs["Hue"].default_value
     hue_sat.inputs["Saturation"].default_value = hue_sat_src.inputs["Saturation"].default_value
 
     tint_mix = nodes.new("ShaderNodeMixRGB")
-    tint_mix.location = (260, -40)
+    tint_mix.location = (360, -40)
     tint_mix.blend_type = "MIX"
     tint_mix.inputs["Fac"].default_value = tint_mix_src.inputs["Fac"].default_value
     tint_color = tint_mix_src.inputs["Color2"].default_value
     tint_mix.inputs["Color2"].default_value = (tint_color[0], tint_color[1], tint_color[2], 1.0)
 
     emit = nodes.new("ShaderNodeEmission")
-    emit.location = (420, 0)
+    emit.location = (520, 0)
     emit.inputs["Strength"].default_value = bg_src.inputs["Strength"].default_value
 
-    links.new(geom.outputs["Position"], sep.inputs["Vector"])
-    links.new(sep.outputs["X"], comb.inputs["X"])
-    links.new(sep.outputs["Y"], comb.inputs["Y"])
-    links.new(comb.outputs["Vector"], norm.inputs["Vector"])
-    links.new(norm.outputs["Vector"], mapping.inputs["Vector"])
+    links.new(geom.outputs["Incoming"], invert_in.inputs[0])
+    links.new(invert_in.outputs["Vector"], reflect.inputs[0])
+    links.new(reflect.outputs["Vector"], mapping.inputs["Vector"])
     links.new(mapping.outputs["Vector"], env.inputs["Vector"])
     links.new(mapping.outputs["Vector"], env_blur.inputs["Vector"])
     links.new(env.outputs["Color"], mix.inputs["Color1"])
@@ -395,12 +456,12 @@ def _apply_fake_ground(
     obj = _ensure_fake_ground_object(context)
     mat = _rebuild_fake_ground_material(
         img,
+        settings.blur_amount,
         mapping_src=mapping_node,
         mix_src=mix_node,
         tint_mix_src=tint_mix_node,
         hue_sat_src=hue_sat_node,
         bg_src=bg_node,
-        lift=settings.fake_ground_lift,
     )
     if obj.data.materials:
         obj.data.materials[0] = mat
@@ -453,6 +514,7 @@ def _sync_world_and_ground_look(context, settings):
         nodes["hue_sat"],
         nodes["bg"],
     )
+    _refresh_hdri_blur_images(settings, nodes["env"], nodes["env_blur"])
 
     img = nodes["env"].image
     if settings.fake_ground and img is not None:
@@ -468,6 +530,14 @@ def _sync_world_and_ground_look(context, settings):
         )
     else:
         _set_fake_ground_visible(False)
+
+
+def _refresh_hdri_blur_images(settings, env_node, env_blur_node):
+    src = env_node.image
+    if src is None:
+        env_blur_node.image = None
+        return
+    env_blur_node.image = _blur_image_copy(src, settings.blur_amount)
 
 
 def _update_look_controls(self, context):
@@ -755,8 +825,7 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
 
         img = bpy.data.images.load(image_path, check_existing=True)
         _set_env_image_colorspace(img)
-        env_node.image = img
-        env_blur_node.image = img
+        _assign_hdri_images(env_node, env_blur_node, img, settings.blur_amount)
 
         _apply_look_controls_to_nodes(
             settings,
@@ -1006,6 +1075,16 @@ class HDRI_API_Preferences(AddonPreferences):
         default="",
         subtype="PASSWORD",
     )
+    register_email: StringProperty(
+        name="Email",
+        description="Email for self-service account registration",
+        default="",
+    )
+    checkout_package_id: StringProperty(
+        name="Token package",
+        description="Package id from GET /v1/billing/packages (e.g. tokens_50)",
+        default="tokens_50",
+    )
     timeout_s: FloatProperty(
         name="Timeout (seconds)",
         default=60.0,
@@ -1017,7 +1096,12 @@ class HDRI_API_Preferences(AddonPreferences):
         layout = self.layout
         layout.prop(self, "api_base_url")
         layout.prop(self, "api_key")
+        layout.prop(self, "register_email")
+        layout.prop(self, "checkout_package_id")
         layout.prop(self, "timeout_s")
+        col = layout.column(align=True)
+        col.operator("hdri.register_account", icon="USER")
+        col.operator("hdri.buy_tokens", icon="FUND")
 
 
 class HDRI_API_Settings(PropertyGroup):
@@ -1131,7 +1215,7 @@ class HDRI_API_Settings(PropertyGroup):
     )
     blur_amount: FloatProperty(
         name="Blur",
-        description="Mixes in a blurred copy of the HDRI for softer lighting",
+        description="Mixes in a Gaussian-blurred copy of the HDRI for softer lighting",
         default=0.0,
         min=0.0,
         max=1.0,
@@ -1231,14 +1315,18 @@ class HDRI_API_Settings(PropertyGroup):
 
     # Sent to POST /v1/hdri — forwarded to PANORAMA_MODE=http_json worker (img2img / outpainting)
     panorama_prompt: StringProperty(
-        name="Panorama prompt",
-        description="Prompt for your panorama worker (http_json). Empty = server/worker defaults",
+        name="Extra prompt",
+        description=(
+            "Optional style/scene hints added to the required ERP outpaint prompt "
+            "(seamless 360°, horizon level, edge match). Leave empty for defaults only"
+        ),
         default="",
     )
     panorama_negative_prompt: StringProperty(
         name="Negative prompt",
-        description="Negative prompt for the panorama worker (optional)",
+        description="Deprecated: workflow defaults are used; not shown in UI",
         default="",
+        options={"HIDDEN"},
     )
     panorama_seed: IntProperty(
         name="Seed",
@@ -1315,8 +1403,8 @@ class HDRI_API_Settings(PropertyGroup):
     )
     seam_fix: BoolProperty(
         name="Seam Fix",
-        description="Worker post-blend at ERP left/right wrap (can soften real detail; leave off if panorama is already good)",
-        default=False,
+        description="API post-process: blur-blend the ERP left/right wrap after generation (works on all backends)",
+        default=True,
     )
     erp_canvas_width: IntProperty(
         name="ERP Canvas Width",
@@ -1402,6 +1490,96 @@ class HDRI_API_Settings(PropertyGroup):
         description="Internal: wall duration of last successful job for ETA refinement",
         options={"HIDDEN"},
     )
+
+
+class HDRI_OT_register_account(Operator):
+    bl_idname = "hdri.register_account"
+    bl_label = "Register account"
+    bl_description = "Create a new API account and store the API key (shown once)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        email = (prefs.register_email or "").strip()
+        if not email:
+            self.report({"ERROR"}, "Enter an email in add-on preferences first.")
+            return {"CANCELLED"}
+        base = prefs.api_base_url.rstrip("/")
+        try:
+            resp = _http_post_json(
+                f"{base}/v1/register",
+                {"email": email},
+                headers={},
+                timeout_s=int(prefs.timeout_s),
+            )
+        except urllib.error.HTTPError as e:
+            try:
+                detail = json.loads(e.read().decode("utf-8")).get("detail", str(e))
+            except Exception:
+                detail = str(e)
+            self.report({"ERROR"}, f"Registration failed: {detail}")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Registration failed: {e}")
+            return {"CANCELLED"}
+
+        api_key = str(resp.get("api_key", "")).strip()
+        if not api_key:
+            self.report({"ERROR"}, "Registration succeeded but no API key was returned.")
+            return {"CANCELLED"}
+        prefs.api_key = api_key
+        settings = context.scene.hdri_api_settings
+        try:
+            settings.tokens_remaining = int(resp.get("tokens_remaining", -1))
+        except Exception:
+            settings.tokens_remaining = -1
+        self.report({"INFO"}, f"Registered {resp.get('account_id', 'account')}. API key saved to preferences.")
+        return {"FINISHED"}
+
+
+class HDRI_OT_buy_tokens(Operator):
+    bl_idname = "hdri.buy_tokens"
+    bl_label = "Buy tokens"
+    bl_description = "Open Stripe checkout in your browser (requires API key and server billing config)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        if not (prefs.api_key or "").strip():
+            self.report({"ERROR"}, "Register or paste an API key in preferences first.")
+            return {"CANCELLED"}
+        base = prefs.api_base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {prefs.api_key.strip()}"}
+        package_id = (prefs.checkout_package_id or "tokens_50").strip()
+        try:
+            resp = _http_post_json(
+                f"{base}/v1/billing/checkout",
+                {"package_id": package_id},
+                headers=headers,
+                timeout_s=int(prefs.timeout_s),
+            )
+        except urllib.error.HTTPError as e:
+            try:
+                detail = json.loads(e.read().decode("utf-8")).get("detail", str(e))
+            except Exception:
+                detail = str(e)
+            self.report({"ERROR"}, f"Checkout failed: {detail}")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Checkout failed: {e}")
+            return {"CANCELLED"}
+
+        url = str(resp.get("checkout_url", "")).strip()
+        if not url:
+            self.report({"ERROR"}, "Server did not return a checkout URL.")
+            return {"CANCELLED"}
+        try:
+            webbrowser.open(url, new=2)
+        except Exception as e:
+            self.report({"WARNING"}, f"Open this URL manually: {url} ({e})")
+            return {"FINISHED"}
+        self.report({"INFO"}, "Opened token checkout in your browser.")
+        return {"FINISHED"}
 
 
 class HDRI_OT_refresh_server_config(Operator):
@@ -1877,8 +2055,6 @@ class HDRI_OT_apply_from_api(Operator):
         # Match hdri_api_server/app.py HdriRequest — only add keys when set
         if s.panorama_prompt.strip():
             payload["panorama_prompt"] = s.panorama_prompt.strip()
-        if s.panorama_negative_prompt.strip():
-            payload["panorama_negative_prompt"] = s.panorama_negative_prompt.strip()
         if s.panorama_seed >= 0:
             payload["panorama_seed"] = int(s.panorama_seed)
         if s.panorama_strength >= 0.0:
@@ -2200,7 +2376,6 @@ class HDRI_PT_panel(Panel):
         fg.enabled = s.fake_ground
         fg.prop(s, "fake_ground_size")
         fg.prop(s, "fake_ground_z_offset")
-        fg.prop(s, "fake_ground_lift")
 
         box = layout.box()
         row = box.row(align=True)
@@ -2260,13 +2435,14 @@ class HDRI_PT_panel(Panel):
             box.label(text=f"Last error: {s.last_job_error[:100]}", icon="ERROR")
         if s.tokens_remaining >= 0:
             box.label(text=f"Tokens remaining: {s.tokens_remaining}", icon="SOLO_ON")
+        acct = box.column(align=True)
+        acct.operator("hdri.register_account", icon="USER")
+        acct.operator("hdri.buy_tokens", icon="FUND")
 
-        box.label(text="Panorama worker fields (http_json only)")
-        box.label(text="Prompts go to your worker; server may still HDR-tonemap after.", icon="INFO")
-        box.label(text="Local mode: run API server + worker + ComfyUI before Generate.", icon="INFO")
+        box.label(text="Panorama options")
+        box.label(text="Extra prompt is merged with required ERP outpaint instructions.", icon="INFO")
         col2 = box.column(align=True)
         col2.prop(s, "panorama_prompt")
-        col2.prop(s, "panorama_negative_prompt")
         row = col2.row(align=True)
         row.prop(s, "panorama_seed")
         row.prop(s, "panorama_strength")
@@ -2290,6 +2466,8 @@ class HDRI_PT_panel(Panel):
 classes = (
     HDRI_API_Preferences,
     HDRI_API_Settings,
+    HDRI_OT_register_account,
+    HDRI_OT_buy_tokens,
     HDRI_OT_refresh_server_config,
     HDRI_OT_open_placement_editor,
     HDRI_OT_close_placement_editor,

@@ -168,24 +168,33 @@ class RemoteProvider:
         return ranked[0]
 
     @staticmethod
-    def _select_runcomfy_image_url(result_data: dict[str, Any]) -> tuple[str | None, str | None]:
+    def _select_runcomfy_image_url(
+        result_data: dict[str, Any],
+        *,
+        prefer_output_node_ids: list[str] | None = None,
+    ) -> tuple[str | None, str | None]:
         """Select the panorama output image URL from a RunComfy /result payload.
 
-        Prefers nodes listed in ``RUNCOMFY_OUTPUT_NODE_IDS`` (comma-separated). If
-        unset, prefers any image with ``type=="output"`` (SaveImage), then ``type=="temp"``
-        (PreviewImage), and finally falls back to a recursive scan. Skips nodes listed
-        in ``RUNCOMFY_OUTPUT_SKIP_NODE_IDS`` (typically the LoadImage we inject).
+        Prefers nodes listed in ``prefer_output_node_ids`` (4k SaveImage, etc.), then
+        ``RUNCOMFY_OUTPUT_NODE_IDS`` (comma-separated). If unset, prefers any image with
+        ``type=="output"`` (SaveImage), then ``type=="temp"`` (PreviewImage), and finally
+        falls back to a recursive scan. Skips nodes listed in ``RUNCOMFY_OUTPUT_SKIP_NODE_IDS``
+        (typically the LoadImage we inject).
         Returns ``(url, source_node_id)``.
         """
         outputs = result_data.get("outputs") if isinstance(result_data, dict) else None
         if not isinstance(outputs, dict):
             return None, None
 
-        whitelist = [
+        base_whitelist = [
             x.strip()
             for x in os.environ.get("RUNCOMFY_OUTPUT_NODE_IDS", "").split(",")
             if x.strip()
         ]
+        if prefer_output_node_ids:
+            whitelist = RemoteProvider._dedupe_node_ids([*prefer_output_node_ids, *base_whitelist])
+        else:
+            whitelist = base_whitelist
         skip = {
             x.strip()
             for x in os.environ.get("RUNCOMFY_OUTPUT_SKIP_NODE_IDS", "").split(",")
@@ -620,6 +629,8 @@ class RemoteProvider:
         quality_mode: str,
         overrides: dict[str, Any] | None,
         workflow_api_json: dict[str, Any] | None = None,
+        delivery_width: int | None = None,
+        delivery_height: int | None = None,
     ) -> dict[str, Any]:
         out: dict[str, Any] = {}
 
@@ -832,7 +843,67 @@ class RemoteProvider:
                     )
                     self._set_override_value(out, node_id, "state_json", state_str)
 
+        if (
+            delivery_width == 4096
+            and delivery_height == 2048
+            and os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip()
+        ):
+            dit_model = os.environ.get("RUNCOMFY_4K_SEEDVR2_DIT_MODEL", "").strip()
+            if dit_model:
+                for node_id in self._parse_node_ids("RUNCOMFY_4K_SEEDVR2_DIT_MODEL_NODE_IDS") or ["69"]:
+                    self._set_override_value(out, node_id, "model", dit_model)
+            vae_model = os.environ.get("RUNCOMFY_4K_SEEDVR2_VAE_MODEL", "").strip()
+            if vae_model:
+                for node_id in self._parse_node_ids("RUNCOMFY_4K_SEEDVR2_VAE_MODEL_NODE_IDS") or ["70"]:
+                    self._set_override_value(out, node_id, "model", vae_model)
+            resolution_raw = os.environ.get("RUNCOMFY_4K_SEEDVR2_RESOLUTION", "").strip()
+            if resolution_raw:
+                try:
+                    resolution = int(resolution_raw)
+                except ValueError:
+                    resolution = 0
+                if resolution > 0:
+                    for node_id in self._parse_node_ids("RUNCOMFY_4K_SEEDVR2_UPSCALER_NODE_IDS") or ["71"]:
+                        self._set_override_value(out, node_id, "resolution", resolution)
+            seedvr2_seed = os.environ.get("RUNCOMFY_4K_SEEDVR2_SEED", "").strip()
+            if seedvr2_seed:
+                try:
+                    seed_val = int(seedvr2_seed)
+                except ValueError:
+                    seed_val = None
+                if seed_val is not None:
+                    for node_id in self._parse_node_ids("RUNCOMFY_4K_SEEDVR2_UPSCALER_NODE_IDS") or ["71"]:
+                        self._set_override_value(out, node_id, "seed", seed_val)
+
         return out
+
+    @staticmethod
+    def _runcomfy_workflow_json_path_for_request(width: int, height: int) -> str:
+        """Workflow file to send for this output size.
+
+        4096x2048 requires ``RUNCOMFY_4K_WORKFLOW_JSON_PATH`` (2k generate + SeedVR2 upscale).
+        """
+        if int(width) == 4096 and int(height) == 2048:
+            p = os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip()
+            if not p:
+                raise RuntimeError(
+                    "4096x2048 output requires RUNCOMFY_4K_WORKFLOW_JSON_PATH (see "
+                    "examples/comfyui_flux2_klein_4b_api_4k_upscale.json). "
+                    "Generation uses 2048x1024 control plus SeedVR2 upscale; set this on the API host."
+                )
+            return p
+        return os.environ.get("RUNCOMFY_WORKFLOW_JSON_PATH", "").strip()
+
+    @staticmethod
+    def _runcomfy_generation_dimensions(width: int, height: int) -> tuple[int, int]:
+        """PanoramaStickers / VAE encode pixel size sent to RunComfy overrides.
+
+        For 4k delivery, overrides stay at 2048x1024 so the graph matches a working 2k outpaint;
+        the workflow refines to 4096x2048 in Comfy.
+        """
+        if int(width) == 4096 and int(height) == 2048 and os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip():
+            return 2048, 1024
+        return int(width), int(height)
 
     def _runcomfy_payload(
         self,
@@ -845,18 +916,21 @@ class RemoteProvider:
         overrides: dict[str, Any] | None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {}
-        workflow_path = os.environ.get("RUNCOMFY_WORKFLOW_JSON_PATH", "").strip()
+        workflow_path = RemoteProvider._runcomfy_workflow_json_path_for_request(width, height)
+        gen_w, gen_h = RemoteProvider._runcomfy_generation_dimensions(width, height)
         if workflow_path:
             with open(workflow_path, encoding="utf-8") as f:
                 payload["workflow_api_json"] = json.load(f)
         runcomfy_overrides = self._build_runcomfy_overrides(
             image_b64=image_b64,
-            width=width,
-            height=height,
+            width=gen_w,
+            height=gen_h,
             scene_mode=scene_mode,
             quality_mode=quality_mode,
             overrides=overrides,
             workflow_api_json=payload.get("workflow_api_json") if isinstance(payload.get("workflow_api_json"), dict) else None,
+            delivery_width=int(width),
+            delivery_height=int(height),
         )
         if runcomfy_overrides:
             payload["overrides"] = runcomfy_overrides
@@ -960,7 +1034,14 @@ class RemoteProvider:
             if str(result_data.get("status", "")).strip().lower() in {"failed", "error"}:
                 raise RuntimeError(f"RunComfy result failed: {result_data}")
 
-            image_url, source_node = self._select_runcomfy_image_url(result_data)
+            prefer_save = None
+            if int(width) == 4096 and int(height) == 2048:
+                prefer_save = RemoteProvider._parse_node_ids("RUNCOMFY_4K_OUTPUT_NODE_IDS")
+                if not prefer_save:
+                    prefer_save = None
+            image_url, source_node = self._select_runcomfy_image_url(
+                result_data, prefer_output_node_ids=prefer_save
+            )
             if not image_url:
                 # If RunComfy returned a normal outputs map but no acceptable non-skipped
                 # output, do not fall back to arbitrary preview/control URLs. That can
