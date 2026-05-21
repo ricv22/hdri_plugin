@@ -13,7 +13,8 @@ The API now supports these 2:1 output sizes:
 
 - `1024x512`
 - `2048x1024` (default)
-- `4096x2048`
+
+4096×2048 (SeedVR2 upscale) is implemented but **disabled** until `HDRI_ENABLE_4K_UPSCALE=1`.
 
 ## Run API server
 

@@ -1,5 +1,7 @@
 # 4K delivery workflow — 2k outpaint + SeedVR2 upscale
 
+> **Deferred for v1.** Not used unless `HDRI_ENABLE_4K_UPSCALE=1` on the API host and the addon exposes 4096×2048 again.
+
 Canonical API JSON: `comfyui_flux2_klein_4b_api_4k_upscale.json`
 
 ## Strategy

@@ -255,17 +255,30 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         self.assertEqual(url, "https://example.com/4k.png")
         self.assertEqual(node_id, "66")
 
-    def test_4096_requires_4k_workflow_env(self) -> None:
-        with patch.dict(os.environ, {"RUNCOMFY_4K_WORKFLOW_JSON_PATH": ""}, clear=False):
+    def test_4096_requires_4k_workflow_when_upscale_enabled(self) -> None:
+        env = {"HDRI_ENABLE_4K_UPSCALE": "1", "RUNCOMFY_4K_WORKFLOW_JSON_PATH": ""}
+        with patch.dict(os.environ, env, clear=False):
             with self.assertRaises(RuntimeError) as ctx:
                 RemoteProvider._runcomfy_workflow_json_path_for_request(4096, 2048)
         self.assertIn("RUNCOMFY_4K_WORKFLOW_JSON_PATH", str(ctx.exception))
+
+    def test_4096_uses_standard_workflow_when_upscale_disabled(self) -> None:
+        wf2 = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "examples", "comfyui_flux2_klein_4b_api.json")
+        )
+        env = {"HDRI_ENABLE_4K_UPSCALE": "0", "RUNCOMFY_WORKFLOW_JSON_PATH": wf2}
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(
+                RemoteProvider._runcomfy_workflow_json_path_for_request(4096, 2048),
+                wf2,
+            )
 
     def test_4k_request_uses_generation_size_2048_in_overrides(self) -> None:
         wf = os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..", "examples", "comfyui_flux2_klein_4b_api_4k_upscale.json")
         )
         env = {
+            "HDRI_ENABLE_4K_UPSCALE": "1",
             "RUNCOMFY_4K_WORKFLOW_JSON_PATH": wf,
             "RUNCOMFY_IMAGE_NODE_IDS": "11",
             "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
@@ -294,6 +307,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
             os.path.join(os.path.dirname(__file__), "..", "examples", "comfyui_flux2_klein_4b_api_4k_upscale.json")
         )
         env = {
+            "HDRI_ENABLE_4K_UPSCALE": "1",
             "RUNCOMFY_4K_WORKFLOW_JSON_PATH": wf,
             "RUNCOMFY_IMAGE_NODE_IDS": "11",
             "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
@@ -331,7 +345,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(RemoteProvider._runcomfy_workflow_json_path_for_request(2048, 1024), wf2)
 
-    def test_panorama_stickers_uses_deployed_4k_output_preset(self) -> None:
+    def test_panorama_stickers_output_preset_matches_request_size(self) -> None:
         env = {
             "RUNCOMFY_IMAGE_NODE_IDS": "11",
             "RUNCOMFY_PANORAMA_STICKERS_NODE_IDS": "56",
@@ -341,8 +355,8 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             out = self.provider._build_runcomfy_overrides(
                 image_b64="YWJj",
-                width=4096,
-                height=2048,
+                width=2048,
+                height=1024,
                 scene_mode="auto",
                 quality_mode="balanced",
                 overrides={
@@ -350,7 +364,7 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
                     "placement_yaw_deg": 12.0,
                 },
             )
-        self.assertEqual(out["56"]["inputs"]["output_preset"], "4096")
+        self.assertEqual(out["56"]["inputs"]["output_preset"], "2048")
 
     def test_auto_detects_sticker_and_loadimage_nodes_from_workflow_json(self) -> None:
         workflow_api_json = {

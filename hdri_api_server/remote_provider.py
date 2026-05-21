@@ -848,6 +848,7 @@ class RemoteProvider:
             and delivery_height == 2048
             and os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip()
         ):
+            # Deferred: SeedVR2 4K upscale branch (see examples/comfyui_flux2_klein_4b_api_4k_upscale.json).
             dit_model = os.environ.get("RUNCOMFY_4K_SEEDVR2_DIT_MODEL", "").strip()
             if dit_model:
                 for node_id in self._parse_node_ids("RUNCOMFY_4K_SEEDVR2_DIT_MODEL_NODE_IDS") or ["69"]:
@@ -878,30 +879,36 @@ class RemoteProvider:
         return out
 
     @staticmethod
-    def _runcomfy_workflow_json_path_for_request(width: int, height: int) -> str:
-        """Workflow file to send for this output size.
+    def _four_k_upscale_enabled() -> bool:
+        return os.environ.get("HDRI_ENABLE_4K_UPSCALE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
-        4096x2048 requires ``RUNCOMFY_4K_WORKFLOW_JSON_PATH`` (2k generate + SeedVR2 upscale).
-        """
-        if int(width) == 4096 and int(height) == 2048:
+    @staticmethod
+    def _runcomfy_workflow_json_path_for_request(width: int, height: int) -> str:
+        """Workflow file to send for this output size."""
+        if (
+            RemoteProvider._four_k_upscale_enabled()
+            and int(width) == 4096
+            and int(height) == 2048
+        ):
             p = os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip()
             if not p:
                 raise RuntimeError(
                     "4096x2048 output requires RUNCOMFY_4K_WORKFLOW_JSON_PATH (see "
                     "examples/comfyui_flux2_klein_4b_api_4k_upscale.json). "
-                    "Generation uses 2048x1024 control plus SeedVR2 upscale; set this on the API host."
+                    "Set HDRI_ENABLE_4K_UPSCALE=1 on the API host when ready."
                 )
             return p
         return os.environ.get("RUNCOMFY_WORKFLOW_JSON_PATH", "").strip()
 
     @staticmethod
     def _runcomfy_generation_dimensions(width: int, height: int) -> tuple[int, int]:
-        """PanoramaStickers / VAE encode pixel size sent to RunComfy overrides.
-
-        For 4k delivery, overrides stay at 2048x1024 so the graph matches a working 2k outpaint;
-        the workflow refines to 4096x2048 in Comfy.
-        """
-        if int(width) == 4096 and int(height) == 2048 and os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip():
+        """PanoramaStickers / VAE encode pixel size sent to RunComfy overrides."""
+        if (
+            RemoteProvider._four_k_upscale_enabled()
+            and int(width) == 4096
+            and int(height) == 2048
+            and os.environ.get("RUNCOMFY_4K_WORKFLOW_JSON_PATH", "").strip()
+        ):
             return 2048, 1024
         return int(width), int(height)
 
@@ -1035,7 +1042,11 @@ class RemoteProvider:
                 raise RuntimeError(f"RunComfy result failed: {result_data}")
 
             prefer_save = None
-            if int(width) == 4096 and int(height) == 2048:
+            if (
+                RemoteProvider._four_k_upscale_enabled()
+                and int(width) == 4096
+                and int(height) == 2048
+            ):
                 prefer_save = RemoteProvider._parse_node_ids("RUNCOMFY_4K_OUTPUT_NODE_IDS")
                 if not prefer_save:
                     prefer_save = None

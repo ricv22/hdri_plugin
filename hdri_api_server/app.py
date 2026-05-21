@@ -447,11 +447,14 @@ def _validate_email(email: str) -> str:
 
 
 def _validate_output_size(width: int, height: int) -> None:
-    allowed = {(1024, 512), (2048, 1024), (4096, 2048)}
+    allowed = {(1024, 512), (2048, 1024)}
     if (width, height) not in allowed:
         raise HTTPException(
             status_code=400,
-            detail="Output size must be one of 1024x512, 2048x1024, or 4096x2048.",
+            detail=(
+                "Output size must be 1024x512 or 2048x1024. "
+                "4096x2048 (SeedVR2 upscale) is not enabled yet."
+            ),
         )
     if width != 2 * height:
         raise HTTPException(status_code=400, detail="Output must use 2:1 equirectangular ratio.")

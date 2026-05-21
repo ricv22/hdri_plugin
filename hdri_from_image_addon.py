@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photo → HDRI World (API)",
     "author": "Cursor AI",
-    "version": (0, 1, 6),
+    "version": (0, 1, 7),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > HDRI",
     "description": "Upload a photo to an API, get a 2:1 HDRI (.hdr/.exr), apply to World lighting (Cycles).",
@@ -1153,8 +1153,7 @@ class HDRI_API_Settings(PropertyGroup):
         name="Output Resolution",
         items=[
             ("1024x512", "1024x512", "Fast preview size"),
-            ("2048x1024", "2048x1024", "Default local ComfyUI target"),
-            ("4096x2048", "4096x2048", "High resolution (heavy GPU load)"),
+            ("2048x1024", "2048x1024", "Default (recommended)"),
         ],
         default="2048x1024",
     )
