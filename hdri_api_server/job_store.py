@@ -89,6 +89,7 @@ class JobStore:
                 """
             )
             self._ensure_column(conn, "accounts", "email", "TEXT")
+            self._ensure_column(conn, "accounts", "password_hash", "TEXT")
             conn.commit()
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
@@ -165,7 +166,7 @@ class JobStore:
             return None
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT account_id, tokens_remaining, email FROM accounts WHERE email = ?",
+                "SELECT account_id, tokens_remaining, email, password_hash FROM accounts WHERE email = ?",
                 (email_norm,),
             ).fetchone()
         if not row:
@@ -174,7 +175,24 @@ class JobStore:
             "account_id": str(row["account_id"]),
             "tokens_remaining": int(row["tokens_remaining"]),
             "email": row["email"],
+            "password_hash": row["password_hash"],
         }
+
+    def set_password_hash(self, account_id: str, password_hash: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE accounts SET password_hash = ? WHERE account_id = ?",
+                (password_hash, account_id),
+            )
+            conn.commit()
+
+    def deactivate_api_keys_for_account(self, account_id: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE api_keys SET is_active = 0 WHERE account_id = ?",
+                (account_id,),
+            )
+            conn.commit()
 
     def add_tokens(self, account_id: str, tokens: int, *, event_type: str, ref: str) -> bool:
         delta = int(tokens)

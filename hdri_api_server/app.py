@@ -49,7 +49,10 @@ from auth import (
     bootstrap_dev_credentials,
     generate_api_key,
     hash_api_key,
+    hash_password,
     require_api_key_enabled,
+    validate_password,
+    verify_password,
 )
 from billing import (
     checkout_completed_event,
@@ -244,6 +247,16 @@ class AccountResponse(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class SetPasswordRequest(BaseModel):
+    password: str = Field(..., min_length=8, max_length=128)
 
 
 class RegisterResponse(BaseModel):
@@ -448,6 +461,27 @@ def _validate_email(email: str) -> str:
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", norm):
         raise HTTPException(status_code=400, detail="Invalid email address.")
     return norm
+
+
+def _issue_api_key_for_account(account_id: str, *, rotate: bool = False) -> str:
+    if rotate:
+        _store.deactivate_api_keys_for_account(account_id)
+    raw_key = generate_api_key()
+    _store.ensure_api_key(hash_api_key(raw_key), account_id)
+    return raw_key
+
+
+def _auth_response_for_account(account_id: str, email: str, *, rotate_key: bool = False) -> RegisterResponse:
+    row = _store.get_account(account_id)
+    if not row:
+        raise HTTPException(status_code=500, detail="Account not found.")
+    raw_key = _issue_api_key_for_account(account_id, rotate=rotate_key)
+    return RegisterResponse(
+        account_id=account_id,
+        api_key=raw_key,
+        tokens_remaining=int(row["tokens_remaining"]),
+        email=email,
+    )
 
 
 def _validate_output_size(width: int, height: int) -> None:
@@ -890,6 +924,7 @@ def register_account(req: RegisterRequest):
     if os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
         raise HTTPException(status_code=503, detail="Self-service registration is disabled.")
     email = _validate_email(req.email)
+    password = validate_password(req.password)
     existing = _store.get_account_by_email(email)
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
@@ -900,17 +935,36 @@ def register_account(req: RegisterRequest):
 
     free_tokens = register_free_tokens()
     _store.ensure_account(account_id, initial_tokens=free_tokens, email=email)
-    raw_key = generate_api_key()
-    _store.ensure_api_key(hash_api_key(raw_key), account_id)
-    row = _store.get_account(account_id)
+    _store.set_password_hash(account_id, hash_password(password))
+    return _auth_response_for_account(account_id, email)
+
+
+@app.post("/v1/login", response_model=RegisterResponse)
+def login_account(req: LoginRequest):
+    email = _validate_email(req.email)
+    row = _store.get_account_by_email(email)
     if not row:
-        raise HTTPException(status_code=500, detail="Failed to create account.")
-    return RegisterResponse(
-        account_id=account_id,
-        api_key=raw_key,
-        tokens_remaining=int(row["tokens_remaining"]),
-        email=email,
-    )
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    stored_hash = row.get("password_hash")
+    if not stored_hash:
+        raise HTTPException(
+            status_code=401,
+            detail="Password not set for this account. Log in with your saved API key or set a password while logged in.",
+        )
+    if not verify_password(req.password, str(stored_hash)):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    return _auth_response_for_account(str(row["account_id"]), email, rotate_key=True)
+
+
+@app.post("/v1/account/set-password")
+def set_account_password(
+    req: SetPasswordRequest,
+    authorization: str | None = Depends(auth_header_value),
+):
+    account = authenticate_account(_store, authorization, required=True)
+    password = validate_password(req.password)
+    _store.set_password_hash(account["account_id"], hash_password(password))
+    return {"ok": True, "account_id": account["account_id"]}
 
 
 @app.get("/v1/billing/packages", response_model=BillingPackagesResponse)

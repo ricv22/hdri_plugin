@@ -13,6 +13,48 @@ def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
+_PBKDF2_ITERATIONS = 600_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        _PBKDF2_ITERATIONS,
+    )
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iter_s, salt_hex, digest_hex = stored.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iter_s)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+    except (ValueError, TypeError):
+        return False
+    actual = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        iterations,
+    )
+    return secrets.compare_digest(actual, expected)
+
+
+def validate_password(password: str) -> str:
+    pwd = (password or "").strip()
+    if len(pwd) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if len(pwd) > 128:
+        raise HTTPException(status_code=400, detail="Password must be at most 128 characters.")
+    return pwd
+
+
 def require_api_key_enabled() -> bool:
     return os.environ.get("HDRI_REQUIRE_API_KEY", "0").strip().lower() in {"1", "true", "yes", "on"}
 

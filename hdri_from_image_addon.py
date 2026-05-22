@@ -20,6 +20,7 @@ import webbrowser
 
 import bpy
 import bpy.utils.previews
+import blf
 import gpu
 import numpy as np
 from gpu_extras.batch import batch_for_shader
@@ -864,6 +865,73 @@ def _clampf(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, float(value)))
 
 
+# Equirectangular u positions for world-facing labels (matches _render_placement_preview_rgb).
+_PLACEMENT_COMPASS_LABELS = (
+    ("FRONT", 0.50),
+    ("LEFT", 0.25),
+    ("RIGHT", 0.75),
+    ("BACK", 0.04),
+    ("BACK", 0.96),
+)
+
+
+def _placement_label_font_size(canvas_w: int) -> int:
+    return max(12, min(20, int(canvas_w / 36)))
+
+
+def _draw_text_label(
+    text: str,
+    cx: float,
+    cy: float,
+    *,
+    font_size: int,
+    color: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 0.95),
+    shadow: bool = True,
+) -> None:
+    font_id = 0
+    blf.size(font_id, font_size)
+    width, _height = blf.dimensions(font_id, text)
+    blf.position(font_id, cx - width * 0.5, cy, 0)
+    if shadow:
+        blf.enable(font_id, blf.SHADOW)
+        blf.shadow(font_id, 3, 0, 0, 0, 0.9)
+    blf.color(font_id, *color)
+    blf.draw(font_id, text)
+    if shadow:
+        blf.disable(font_id, blf.SHADOW)
+
+
+def _draw_placement_compass_labels(x: int, y: int, w: int, h: int) -> None:
+    """Draw FRONT/LEFT/RIGHT/BACK and SKY/GROUND on the 2:1 ERP preview."""
+    font_size = _placement_label_font_size(w)
+    cx = x + w * 0.5
+    horizon_y = y + h * 0.5
+
+    for text, u in _PLACEMENT_COMPASS_LABELS:
+        label_x = x + w * u
+        accent = (1.0, 0.92, 0.45, 0.98) if text == "FRONT" else (1.0, 1.0, 1.0, 0.9)
+        _draw_text_label(text, label_x, horizon_y - font_size * 0.35, font_size=font_size, color=accent)
+
+    _draw_text_label(
+        "SKY",
+        cx,
+        y + h * 0.88,
+        font_size=font_size,
+        color=(0.72, 0.88, 1.0, 0.95),
+    )
+    _draw_text_label(
+        "GROUND",
+        cx,
+        y + h * 0.06,
+        font_size=font_size,
+        color=(0.82, 0.72, 0.55, 0.95),
+    )
+
+    hint = "Drag photo · wheel = scale · R = rotate drag"
+    hint_size = max(10, font_size - 3)
+    _draw_text_label(hint, cx, y + h + 18, font_size=hint_size, color=(0.85, 0.85, 0.85, 0.85))
+
+
 def _coverage_to_hfov_deg(coverage: float) -> float:
     # Map UI coverage to a more camera-like rectilinear hFOV:
     # 0.15 -> 35deg, 0.85 -> 95deg.
@@ -1069,16 +1137,22 @@ class HDRI_API_Preferences(AddonPreferences):
         description="HDRI API root (no trailing slash), e.g. http://127.0.0.1:8000 — must match where uvicorn runs",
         default="http://127.0.0.1:8000",
     )
-    api_key: StringProperty(
-        name="API Key (optional)",
-        description="Sent as Authorization: Bearer <key>",
+    register_email: StringProperty(
+        name="Email",
+        description="Email for account registration and login",
+        default="",
+    )
+    account_password: StringProperty(
+        name="Password",
+        description="Account password (registration and login)",
         default="",
         subtype="PASSWORD",
     )
-    register_email: StringProperty(
-        name="Email",
-        description="Email for self-service account registration",
+    api_key: StringProperty(
+        name="API Key (optional)",
+        description="Stored automatically after login/register; sent as Authorization: Bearer",
         default="",
+        subtype="PASSWORD",
     )
     checkout_package_id: StringProperty(
         name="Token package",
@@ -1095,13 +1169,16 @@ class HDRI_API_Preferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "api_base_url")
-        layout.prop(self, "api_key")
+        layout.label(text="Account")
         layout.prop(self, "register_email")
+        layout.prop(self, "account_password")
+        row = layout.row(align=True)
+        row.operator("hdri.login_account", icon="KEYINGSET")
+        row.operator("hdri.register_account", icon="USER")
+        layout.prop(self, "api_key")
         layout.prop(self, "checkout_package_id")
         layout.prop(self, "timeout_s")
-        col = layout.column(align=True)
-        col.operator("hdri.register_account", icon="USER")
-        col.operator("hdri.buy_tokens", icon="FUND")
+        layout.operator("hdri.buy_tokens", icon="FUND")
 
 
 class HDRI_API_Settings(PropertyGroup):
@@ -1490,23 +1567,76 @@ class HDRI_API_Settings(PropertyGroup):
     )
 
 
-class HDRI_OT_register_account(Operator):
-    bl_idname = "hdri.register_account"
-    bl_label = "Register account"
-    bl_description = "Create a new API account and store the API key (shown once)"
+class HDRI_OT_login_account(Operator):
+    bl_idname = "hdri.login_account"
+    bl_label = "Log in"
+    bl_description = "Log in with email and password; stores a fresh API key in preferences"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
         prefs = _addon_prefs()
         email = (prefs.register_email or "").strip()
+        password = prefs.account_password or ""
+        if not email:
+            self.report({"ERROR"}, "Enter your email in add-on preferences.")
+            return {"CANCELLED"}
+        if not password:
+            self.report({"ERROR"}, "Enter your password in add-on preferences.")
+            return {"CANCELLED"}
+        base = prefs.api_base_url.rstrip("/")
+        try:
+            resp = _http_post_json(
+                f"{base}/v1/login",
+                {"email": email, "password": password},
+                headers={},
+                timeout_s=int(prefs.timeout_s),
+            )
+        except urllib.error.HTTPError as e:
+            try:
+                detail = json.loads(e.read().decode("utf-8")).get("detail", str(e))
+            except Exception:
+                detail = str(e)
+            self.report({"ERROR"}, f"Login failed: {detail}")
+            return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, f"Login failed: {e}")
+            return {"CANCELLED"}
+
+        api_key = str(resp.get("api_key", "")).strip()
+        if not api_key:
+            self.report({"ERROR"}, "Login succeeded but no API key was returned.")
+            return {"CANCELLED"}
+        prefs.api_key = api_key
+        settings = context.scene.hdri_api_settings
+        try:
+            settings.tokens_remaining = int(resp.get("tokens_remaining", -1))
+        except Exception:
+            settings.tokens_remaining = -1
+        self.report({"INFO"}, f"Logged in as {resp.get('account_id', 'account')}.")
+        return {"FINISHED"}
+
+
+class HDRI_OT_register_account(Operator):
+    bl_idname = "hdri.register_account"
+    bl_label = "Register"
+    bl_description = "Create a new account with email and password; stores the API key"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        email = (prefs.register_email or "").strip()
+        password = prefs.account_password or ""
         if not email:
             self.report({"ERROR"}, "Enter an email in add-on preferences first.")
+            return {"CANCELLED"}
+        if len(password) < 8:
+            self.report({"ERROR"}, "Password must be at least 8 characters.")
             return {"CANCELLED"}
         base = prefs.api_base_url.rstrip("/")
         try:
             resp = _http_post_json(
                 f"{base}/v1/register",
-                {"email": email},
+                {"email": email, "password": password},
                 headers={},
                 timeout_s=int(prefs.timeout_s),
             )
@@ -1544,7 +1674,7 @@ class HDRI_OT_buy_tokens(Operator):
     def execute(self, context):
         prefs = _addon_prefs()
         if not (prefs.api_key or "").strip():
-            self.report({"ERROR"}, "Register or paste an API key in preferences first.")
+            self.report({"ERROR"}, "Log in or register in add-on preferences first.")
             return {"CANCELLED"}
         base = prefs.api_base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {prefs.api_key.strip()}"}
@@ -1615,7 +1745,10 @@ class HDRI_OT_refresh_server_config(Operator):
 class HDRI_OT_open_placement_editor(Operator):
     bl_idname = "hdri.open_placement_editor"
     bl_label = "Open placement editor"
-    bl_description = "Drag the source image on a 2:1 panorama preview and scale/rotate it"
+    bl_description = (
+        "Drag the source image on a labeled 2:1 panorama "
+        "(FRONT/LEFT/RIGHT/BACK/SKY/GROUND) and scale/rotate it"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     _draw_handle = None
@@ -1737,12 +1870,16 @@ class HDRI_OT_open_placement_editor(Operator):
                 "pos": (
                     (cx, y),
                     (cx, y + h),
+                    (x + w * 0.25, y),
+                    (x + w * 0.25, y + h),
+                    (x + w * 0.75, y),
+                    (x + w * 0.75, y + h),
                     (x, cy),
                     (x + w, cy),
                 )
             },
         )
-        outline.uniform_float("color", (1.0, 1.0, 1.0, 0.35))
+        outline.uniform_float("color", (1.0, 1.0, 1.0, 0.22))
         cross.draw(outline)
 
         # Ground-level guide (horizon / pitch=0) to help manual alignment.
@@ -1754,6 +1891,8 @@ class HDRI_OT_open_placement_editor(Operator):
         outline.uniform_float("color", (1.0, 0.85, 0.25, 0.95))
         horizon.draw(outline)
         gpu.state.blend_set("NONE")
+
+        _draw_placement_compass_labels(x, y, w, h)
 
     def invoke(self, context, event):
         if HDRI_OT_open_placement_editor._active_instance is not None:
@@ -2434,7 +2573,11 @@ class HDRI_PT_panel(Panel):
         if s.tokens_remaining >= 0:
             box.label(text=f"Tokens remaining: {s.tokens_remaining}", icon="SOLO_ON")
         acct = box.column(align=True)
-        acct.operator("hdri.register_account", icon="USER")
+        acct.prop(_addon_prefs(), "register_email", text="Email")
+        acct.prop(_addon_prefs(), "account_password", text="Password")
+        row_acct = acct.row(align=True)
+        row_acct.operator("hdri.login_account", icon="KEYINGSET")
+        row_acct.operator("hdri.register_account", icon="USER")
         acct.operator("hdri.buy_tokens", icon="FUND")
 
         box.label(text="Panorama options")
@@ -2464,6 +2607,7 @@ class HDRI_PT_panel(Panel):
 classes = (
     HDRI_API_Preferences,
     HDRI_API_Settings,
+    HDRI_OT_login_account,
     HDRI_OT_register_account,
     HDRI_OT_buy_tokens,
     HDRI_OT_refresh_server_config,
