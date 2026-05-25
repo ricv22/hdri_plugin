@@ -346,6 +346,14 @@ def _default_ground_projection_blend_path() -> str:
     return os.path.join(_addon_dir(), "templates", "ground_projection.blend")
 
 
+def _node_groups():
+    """Return bpy.data.node_groups when available (not during restricted register)."""
+    data = getattr(bpy, "data", None)
+    if data is None:
+        return None
+    return getattr(data, "node_groups", None)
+
+
 def _set_fake_ground_visible(visible: bool):
     """Hide legacy mesh plane if an old file still has HDRI_FakeGround."""
     obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
@@ -427,16 +435,21 @@ def _ground_group_is_valid(ng: bpy.types.NodeTree | None) -> bool:
 def _load_ground_group_from_blend(filepath: str, group_name: str) -> bpy.types.NodeTree | None:
     if not filepath or not os.path.isfile(filepath):
         return None
-    existing = bpy.data.node_groups.get(group_name)
+    groups = _node_groups()
+    if groups is None:
+        return None
+    existing = groups.get(group_name)
     if existing is not None and _ground_group_is_valid(existing):
         return existing
+    if not hasattr(bpy.data, "libraries"):
+        return None
     with bpy.data.libraries.load(filepath, link=False) as (data_from, data_to):
         if group_name not in data_from.node_groups:
             return None
         data_to.node_groups = [group_name]
-    ng = bpy.data.node_groups.get(group_name)
+    ng = groups.get(group_name)
     if ng is None:
-        for candidate in bpy.data.node_groups:
+        for candidate in groups:
             if candidate.name.startswith(group_name):
                 ng = candidate
                 break
@@ -448,7 +461,10 @@ def _resolve_custom_ground_group() -> bpy.types.NodeTree | None:
     if prefs is None or not prefs.use_custom_ground_projection:
         return None
     path = (prefs.ground_projection_blend or "").strip() or _default_ground_projection_blend_path()
-    ng = bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME)
+    groups = _node_groups()
+    if groups is None:
+        return None
+    ng = groups.get(_CUSTOM_GROUND_GROUP_NAME)
     if _ground_group_is_valid(ng):
         return ng
     ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
@@ -457,16 +473,19 @@ def _resolve_custom_ground_group() -> bpy.types.NodeTree | None:
     return _ensure_default_ground_projection_template()
 
 
-def _build_ground_projection_node_group_asset() -> bpy.types.NodeTree:
+def _build_ground_projection_node_group_asset() -> bpy.types.NodeTree | None:
     """Create the bundled HDRI Ground Projection node group (Easy HDRI topology)."""
+    groups = _node_groups()
+    if groups is None:
+        return None
     name = _CUSTOM_GROUND_GROUP_NAME
-    existing = bpy.data.node_groups.get(name)
+    existing = groups.get(name)
     if existing is not None and _ground_group_is_valid(existing):
         return existing
     if existing is not None:
-        bpy.data.node_groups.remove(existing)
+        groups.remove(existing)
 
-    ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    ng = groups.new(name, "ShaderNodeTree")
     _node_group_add_socket(ng, "Vector", in_out="INPUT", socket_type="NodeSocketVector")
     _node_group_add_socket(ng, "Size", in_out="INPUT", socket_type="NodeSocketVector")
     _node_group_add_socket(ng, "Horizon", in_out="INPUT", socket_type="NodeSocketVector")
@@ -581,16 +600,19 @@ def _build_ground_projection_node_group_asset() -> bpy.types.NodeTree:
 
 def _ensure_default_ground_projection_template() -> bpy.types.NodeTree | None:
     """Load templates/ground_projection.blend or create the default group and save it."""
+    if _node_groups() is None:
+        return None
     path = _default_ground_projection_blend_path()
     ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
     if ng is not None:
         return ng
     ng = _build_ground_projection_node_group_asset()
-    if not _ground_group_is_valid(ng):
+    if ng is None or not _ground_group_is_valid(ng):
         return None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        bpy.data.libraries.write(path, {ng}, fake_user=True)
+        if hasattr(bpy.data, "libraries"):
+            bpy.data.libraries.write(path, {ng}, fake_user=True)
     except Exception:
         pass
     return ng
@@ -1482,7 +1504,11 @@ class HDRI_OT_save_ground_projection(Operator):
     )
 
     def execute(self, context):
-        ng = bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME)
+        groups = _node_groups()
+        if groups is None:
+            self.report({"ERROR"}, "Blender data API not ready; try again from the 3D Viewport.")
+            return {"CANCELLED"}
+        ng = groups.get(_CUSTOM_GROUND_GROUP_NAME)
         if ng is None:
             self.report(
                 {"ERROR"},
@@ -1513,8 +1539,13 @@ class HDRI_OT_reload_ground_projection(Operator):
     def execute(self, context):
         prefs = _addon_prefs()
         path = (prefs.ground_projection_blend or "").strip() or _default_ground_projection_blend_path()
-        if bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME) is not None:
-            bpy.data.node_groups.remove(bpy.data.node_groups[_CUSTOM_GROUND_GROUP_NAME])
+        groups = _node_groups()
+        if groups is None:
+            self.report({"ERROR"}, "Blender data API not ready; try again from the 3D Viewport.")
+            return {"CANCELLED"}
+        existing = groups.get(_CUSTOM_GROUND_GROUP_NAME)
+        if existing is not None:
+            groups.remove(existing)
         ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
         if ng is None:
             self.report({"ERROR"}, f"Could not load a valid group from {path}")
@@ -3075,7 +3106,6 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.hdri_api_settings = PointerProperty(type=HDRI_API_Settings)
-    _ensure_default_ground_projection_template()
 
 
 def unregister():
