@@ -16,20 +16,20 @@ class PanoramaPromptTests(unittest.TestCase):
         self.assertIsNone(compose_panorama_prompt(None))
         self.assertIsNone(compose_panorama_prompt("   "))
 
-    def test_user_appended_after_base_by_default(self) -> None:
+    def test_user_before_base_by_default(self) -> None:
         out = compose_panorama_prompt("sunset golden hour")
         self.assertIsNotNone(out)
         assert out is not None
-        self.assertTrue(out.startswith(DEFAULT_BASE_PANORAMA_PROMPT))
-        self.assertTrue(out.endswith("sunset golden hour"))
+        self.assertTrue(out.startswith("sunset golden hour"))
+        self.assertIn(DEFAULT_BASE_PANORAMA_PROMPT, out)
 
-    def test_user_before_base(self) -> None:
-        with patch.dict(os.environ, {"HDRI_PROMPT_USER_POSITION": "before"}, clear=False):
+    def test_user_after_base_when_env_set(self) -> None:
+        with patch.dict(os.environ, {"HDRI_PROMPT_USER_POSITION": "after"}, clear=False):
             out = compose_panorama_prompt("misty forest")
         self.assertIsNotNone(out)
         assert out is not None
-        self.assertTrue(out.startswith("misty forest"))
-        self.assertIn(DEFAULT_BASE_PANORAMA_PROMPT, out)
+        self.assertTrue(out.startswith(DEFAULT_BASE_PANORAMA_PROMPT))
+        self.assertTrue(out.endswith("misty forest"))
 
 
 class ErpSeamTests(unittest.TestCase):

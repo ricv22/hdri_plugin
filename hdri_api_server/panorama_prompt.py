@@ -21,7 +21,7 @@ def compose_panorama_prompt(user_prompt: str | None) -> str | None:
     """Merge user text with the required ERP outpaint instructions.
 
     User text is placed before or after the base block depending on
-    ``HDRI_PROMPT_USER_POSITION`` (``after`` default, or ``before``).
+    ``HDRI_PROMPT_USER_POSITION`` (``before`` default, or ``after``).
     Returns ``None`` when the user prompt is empty so workflow defaults apply.
     """
     user = (user_prompt or "").strip()
@@ -29,7 +29,7 @@ def compose_panorama_prompt(user_prompt: str | None) -> str | None:
         return None
 
     base = base_panorama_prompt()
-    position = os.environ.get("HDRI_PROMPT_USER_POSITION", "after").strip().lower()
+    position = os.environ.get("HDRI_PROMPT_USER_POSITION", "before").strip().lower()
     if position == "before":
         return f"{user} {base}".strip()
     return f"{base} {user}".strip()

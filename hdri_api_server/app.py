@@ -101,7 +101,7 @@ class HdriRequest(BaseModel):
     panorama_prompt: str | None = Field(
         None,
         description=(
-            "Optional user text merged with the required ERP outpaint base prompt "
+            "Optional user text prepended before the required ERP outpaint base prompt "
             "(seamless 360°, horizon level, edge match). Empty = workflow default only."
         ),
     )

@@ -80,16 +80,47 @@ def _ensure_world_nodes(world: bpy.types.World):
     if not bg.outputs["Background"].is_linked:
         links.new(bg.outputs["Background"], out.inputs["Surface"])
 
-    env = next((n for n in nodes if n.bl_idname == "ShaderNodeTexEnvironment"), None)
+    env = next(
+        (
+            n
+            for n in nodes
+            if n.bl_idname == "ShaderNodeTexEnvironment"
+            and n.label not in ("HDRI Blur Source", "HDRI Ground Projected")
+        ),
+        None,
+    )
     if env is None:
         env = nodes.new("ShaderNodeTexEnvironment")
         env.location = (-350, 0)
+    env.label = "HDRI Environment"
 
-    env_blur = next((n for n in nodes if n.bl_idname == "ShaderNodeTexEnvironment" and n != env), None)
+    env_blur = next(
+        (
+            n
+            for n in nodes
+            if n.bl_idname == "ShaderNodeTexEnvironment"
+            and n.label == "HDRI Blur Source"
+        ),
+        None,
+    )
     if env_blur is None:
         env_blur = nodes.new("ShaderNodeTexEnvironment")
         env_blur.label = "HDRI Blur Source"
         env_blur.location = (-350, -220)
+
+    env_projected = next(
+        (
+            n
+            for n in nodes
+            if n.bl_idname == "ShaderNodeTexEnvironment"
+            and n.label == "HDRI Ground Projected"
+        ),
+        None,
+    )
+    if env_projected is None:
+        env_projected = nodes.new("ShaderNodeTexEnvironment")
+        env_projected.label = "HDRI Ground Projected"
+        env_projected.location = (-350, -440)
 
     mix = next((n for n in nodes if n.bl_idname == "ShaderNodeMixRGB" and n.label == "HDRI Blur Mix"), None)
     if mix is None:
@@ -100,6 +131,17 @@ def _ensure_world_nodes(world: bpy.types.World):
         mix.blend_type = "MIX"
         mix.inputs["Fac"].default_value = 0.0
     mix.label = "HDRI Blur Mix"
+
+    ground_mix = next(
+        (n for n in nodes if n.bl_idname == "ShaderNodeMixRGB" and n.label == "HDRI Ground Mix"),
+        None,
+    )
+    if ground_mix is None:
+        ground_mix = nodes.new("ShaderNodeMixRGB")
+        ground_mix.location = (-120, -280)
+        ground_mix.blend_type = "MIX"
+        ground_mix.inputs["Fac"].default_value = 0.0
+    ground_mix.label = "HDRI Ground Mix"
 
     hue_sat = next((n for n in nodes if n.bl_idname == "ShaderNodeHueSaturation"), None)
     if hue_sat is None:
@@ -119,6 +161,7 @@ def _ensure_world_nodes(world: bpy.types.World):
     if mapping is None:
         mapping = nodes.new("ShaderNodeMapping")
         mapping.location = (-650, 0)
+    mapping.vector_type = "TEXTURE"
 
     texcoord = next((n for n in nodes if n.bl_idname == "ShaderNodeTexCoord"), None)
     if texcoord is None:
@@ -127,14 +170,20 @@ def _ensure_world_nodes(world: bpy.types.World):
 
     if not mapping.inputs["Vector"].is_linked:
         links.new(texcoord.outputs["Generated"], mapping.inputs["Vector"])
-    if not env.inputs["Vector"].is_linked:
-        links.new(mapping.outputs["Vector"], env.inputs["Vector"])
-    if not env_blur.inputs["Vector"].is_linked:
-        links.new(mapping.outputs["Vector"], env_blur.inputs["Vector"])
+    mapping_vector = mapping.outputs["Vector"]
+    for env_node in (env, env_blur):
+        for link in list(env_node.inputs["Vector"].links):
+            links.remove(link)
+        links.new(mapping_vector, env_node.inputs["Vector"])
     if not mix.inputs["Color1"].is_linked:
         links.new(env.outputs["Color"], mix.inputs["Color1"])
-    if not mix.inputs["Color2"].is_linked:
-        links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
+    if not ground_mix.inputs["Color1"].is_linked:
+        links.new(env_blur.outputs["Color"], ground_mix.inputs["Color1"])
+    if not ground_mix.inputs["Color2"].is_linked:
+        links.new(env_projected.outputs["Color"], ground_mix.inputs["Color2"])
+    for link in list(mix.inputs["Color2"].links):
+        links.remove(link)
+    links.new(ground_mix.outputs["Color"], mix.inputs["Color2"])
     if not hue_sat.inputs["Color"].is_linked:
         links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
     if not tint_mix.inputs["Color1"].is_linked:
@@ -148,11 +197,14 @@ def _ensure_world_nodes(world: bpy.types.World):
         "nt": nt,
         "env": env,
         "env_blur": env_blur,
+        "env_projected": env_projected,
+        "ground_mix": ground_mix,
         "mix": mix,
         "tint_mix": tint_mix,
         "hue_sat": hue_sat,
         "bg": bg,
         "mapping": mapping,
+        "texcoord": texcoord,
     }
 
 
@@ -274,12 +326,28 @@ def _blur_image_copy(source_img: bpy.types.Image, blur_amount: float) -> bpy.typ
     return blur_img
 
 
-def _assign_hdri_images(env_node, env_blur_node, source_img, blur_amount: float):
+def _assign_hdri_images(env_node, env_blur_node, env_projected_node, source_img, blur_amount: float):
     env_node.image = source_img
-    env_blur_node.image = _blur_image_copy(source_img, blur_amount)
+    blur_img = _blur_image_copy(source_img, blur_amount)
+    env_blur_node.image = blur_img
+    if env_projected_node is not None:
+        env_projected_node.image = source_img
+
+
+_HDRI_GP = "HDRI GP"
+_CUSTOM_GROUND_GROUP_NAME = "HDRI Ground Projection"
+
+
+def _addon_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_ground_projection_blend_path() -> str:
+    return os.path.join(_addon_dir(), "templates", "ground_projection.blend")
 
 
 def _set_fake_ground_visible(visible: bool):
+    """Hide legacy mesh plane if an old file still has HDRI_FakeGround."""
     obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
     if obj is None:
         return
@@ -287,194 +355,486 @@ def _set_fake_ground_visible(visible: bool):
     obj.hide_render = not visible
 
 
-def _build_fake_ground_mesh(mesh: bpy.types.Mesh):
-    """Fill mesh with a 2×2 XY quad (−1..1)."""
-    bm = None
+def _find_node_by_label(nodes, label: str):
+    for node in nodes:
+        if node.label == label:
+            return node
+    return None
+
+
+def _gp_get(nodes, label: str, node_type: str):
+    full_label = f"{_HDRI_GP} {label}"
+    node = _find_node_by_label(nodes, full_label)
+    if node is None:
+        node = nodes.new(node_type)
+        node.label = full_label
+    return node
+
+
+def _gp_link(links, src, dst):
+    for link in list(dst.links):
+        links.remove(link)
+    links.new(src, dst)
+
+
+def _remove_broken_ground_group_nodes(nt: bpy.types.NodeTree) -> None:
+    for node in list(nt.nodes):
+        if node.label.startswith("HDRI Ground Projection "):
+            nt.nodes.remove(node)
+
+
+def _clear_inline_ground_nodes(nt: bpy.types.NodeTree) -> None:
+    prefix = f"{_HDRI_GP} "
+    for node in list(nt.nodes):
+        if node.label.startswith(prefix):
+            nt.nodes.remove(node)
+
+
+def _clear_world_ground_group_node(nt: bpy.types.NodeTree) -> None:
+    for node in list(nt.nodes):
+        if node.bl_idname == "ShaderNodeGroup" and node.label == _CUSTOM_GROUND_GROUP_NAME:
+            nt.nodes.remove(node)
+
+
+def _ngroup_socket_names(ng: bpy.types.NodeTree, *, in_out: str) -> set[str]:
+    names: set[str] = set()
+    if hasattr(ng, "interface"):
+        for item in ng.interface.items_tree:
+            socket_in_out = getattr(item, "in_out", None)
+            if socket_in_out == in_out and getattr(item, "name", None):
+                names.add(item.name)
+        return names
+    coll = ng.inputs if in_out == "INPUT" else ng.outputs
+    for item in coll:
+        names.add(item.name)
+    return names
+
+
+def _ground_group_is_valid(ng: bpy.types.NodeTree | None) -> bool:
+    if ng is None:
+        return False
+    inputs = _ngroup_socket_names(ng, in_out="INPUT")
+    outputs = _ngroup_socket_names(ng, in_out="OUTPUT")
+    return (
+        "Vector" in inputs
+        and "Size" in inputs
+        and "Horizon" in inputs
+        and "Rotation" in inputs
+        and "Vector" in outputs
+    )
+
+
+def _load_ground_group_from_blend(filepath: str, group_name: str) -> bpy.types.NodeTree | None:
+    if not filepath or not os.path.isfile(filepath):
+        return None
+    existing = bpy.data.node_groups.get(group_name)
+    if existing is not None and _ground_group_is_valid(existing):
+        return existing
+    with bpy.data.libraries.load(filepath, link=False) as (data_from, data_to):
+        if group_name not in data_from.node_groups:
+            return None
+        data_to.node_groups = [group_name]
+    ng = bpy.data.node_groups.get(group_name)
+    if ng is None:
+        for candidate in bpy.data.node_groups:
+            if candidate.name.startswith(group_name):
+                ng = candidate
+                break
+    return ng if _ground_group_is_valid(ng) else None
+
+
+def _resolve_custom_ground_group() -> bpy.types.NodeTree | None:
+    prefs = _addon_prefs()
+    if prefs is None or not prefs.use_custom_ground_projection:
+        return None
+    path = (prefs.ground_projection_blend or "").strip() or _default_ground_projection_blend_path()
+    ng = bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME)
+    if _ground_group_is_valid(ng):
+        return ng
+    ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
+    if ng is not None:
+        return ng
+    return _ensure_default_ground_projection_template()
+
+
+def _build_ground_projection_node_group_asset() -> bpy.types.NodeTree:
+    """Create the bundled HDRI Ground Projection node group (Easy HDRI topology)."""
+    name = _CUSTOM_GROUND_GROUP_NAME
+    existing = bpy.data.node_groups.get(name)
+    if existing is not None and _ground_group_is_valid(existing):
+        return existing
+    if existing is not None:
+        bpy.data.node_groups.remove(existing)
+
+    ng = bpy.data.node_groups.new(name, "ShaderNodeTree")
+    _node_group_add_socket(ng, "Vector", in_out="INPUT", socket_type="NodeSocketVector")
+    _node_group_add_socket(ng, "Size", in_out="INPUT", socket_type="NodeSocketVector")
+    _node_group_add_socket(ng, "Horizon", in_out="INPUT", socket_type="NodeSocketVector")
+    _node_group_add_socket(ng, "Rotation", in_out="INPUT", socket_type="NodeSocketVectorEuler")
+    _node_group_add_socket(ng, "Vector", in_out="OUTPUT", socket_type="NodeSocketVector")
+
+    nodes = ng.nodes
+    links = ng.links
+    gi, go = _group_io_nodes(ng)
+
+    vec_in = gi.outputs.get("Vector") or gi.outputs[0]
+    size_in = gi.outputs.get("Size") or gi.outputs[1]
+    horizon_in = gi.outputs.get("Horizon") or gi.outputs[2]
+    rot_in = gi.outputs.get("Rotation") or gi.outputs[3]
+    vec_out = go.inputs.get("Vector") or go.inputs[0]
+
+    vtransform = nodes.new("ShaderNodeVectorTransform")
+    vtransform.vector_type = "POINT"
+    vtransform.convert_from = "CAMERA"
+    vtransform.convert_to = "WORLD"
+    vtransform.location = (-1166, 60)
+
+    vrotate = nodes.new("ShaderNodeVectorRotate")
+    vrotate.rotation_type = "EULER_XYZ"
+    vrotate.invert = True
+    vrotate.inputs["Center"].default_value = (0.0, 0.0, 0.0)
+    vrotate.location = (-936, 60)
+
+    sep_rot = nodes.new("ShaderNodeSeparateXYZ")
+    sep_rot.location = (-690, 60)
+
+    dot_down = nodes.new("ShaderNodeVectorMath")
+    dot_down.operation = "DOT_PRODUCT"
+    dot_down.inputs[1].default_value = (0.0, 0.0, -1.0)
+    dot_down.location = (-872, -140)
+
+    ratio = nodes.new("ShaderNodeMath")
+    ratio.operation = "DIVIDE"
+    ratio.use_clamp = False
+    ratio.location = (-446, 60)
+
+    scale_vec = nodes.new("ShaderNodeVectorMath")
+    scale_vec.operation = "SCALE"
+    scale_vec.location = (-202, 60)
+
+    add_vec = nodes.new("ShaderNodeVectorMath")
+    add_vec.operation = "ADD"
+    add_vec.location = (42, 60)
+
+    sub_size = nodes.new("ShaderNodeVectorMath")
+    sub_size.operation = "SUBTRACT"
+    sub_size.location = (287, 60)
+
+    normalize = nodes.new("ShaderNodeVectorMath")
+    normalize.operation = "NORMALIZE"
+    normalize.location = (531, 60)
+
+    sep_orig = nodes.new("ShaderNodeSeparateXYZ")
+    sep_orig.location = (286, -140)
+
+    sky_test = nodes.new("ShaderNodeMath")
+    sky_test.operation = "GREATER_THAN"
+    sky_test.inputs[1].default_value = 0.0
+    sky_test.location = (531, -140)
+
     try:
-        import bmesh
+        mix = nodes.new("ShaderNodeMix")
+        mix.data_type = "VECTOR"
+        mix.clamp_factor = False
+        mix.location = (776, 60)
+        mix_a = mix.inputs.get("A") or mix.inputs[6]
+        mix_b = mix.inputs.get("B") or mix.inputs[7]
+        mix_fac = mix.inputs.get("Factor") or mix.inputs[0]
+        mix_out = mix.outputs.get("Vector") or mix.outputs[0]
+    except Exception:
+        mix = nodes.new("ShaderNodeMixRGB")
+        mix.location = (776, 60)
+        mix_a = mix.inputs["Color1"]
+        mix_b = mix.inputs["Color2"]
+        mix_fac = mix.inputs["Fac"]
+        mix_out = mix.outputs["Color"]
 
-        bm = bmesh.new()
-        v0 = bm.verts.new((-1.0, -1.0, 0.0))
-        v1 = bm.verts.new((1.0, -1.0, 0.0))
-        v2 = bm.verts.new((1.0, 1.0, 0.0))
-        v3 = bm.verts.new((-1.0, 1.0, 0.0))
-        bm.faces.new((v0, v1, v2, v3))
-        try:
-            bm.normal_update()
-        except AttributeError:
-            bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
-        bm.to_mesh(mesh)
-        mesh.update()
-    finally:
-        if bm:
-            bm.free()
+    sub_horizon = nodes.new("ShaderNodeVectorMath")
+    sub_horizon.operation = "SUBTRACT"
+    sub_horizon.location = (1020, 60)
 
+    _gp_link(links, vec_in, vtransform.inputs[0])
+    _gp_link(links, vec_in, dot_down.inputs[0])
+    _gp_link(links, vec_in, scale_vec.inputs[0])
+    _gp_link(links, vec_in, sep_orig.inputs["Vector"])
+    _gp_link(links, vec_in, mix_b)
+    _gp_link(links, rot_in, vrotate.inputs["Rotation"])
+    _gp_link(links, vtransform.outputs["Vector"], vrotate.inputs["Vector"])
+    _gp_link(links, vrotate.outputs["Vector"], sep_rot.inputs["Vector"])
+    _gp_link(links, sep_rot.outputs["Z"], ratio.inputs[0])
+    _gp_link(links, dot_down.outputs["Value"], ratio.inputs[1])
+    _gp_link(links, ratio.outputs["Value"], scale_vec.inputs["Scale"])
+    _gp_link(links, scale_vec.outputs["Vector"], add_vec.inputs[0])
+    _gp_link(links, vrotate.outputs["Vector"], add_vec.inputs[1])
+    _gp_link(links, add_vec.outputs["Vector"], sub_size.inputs[0])
+    _gp_link(links, size_in, sub_size.inputs[1])
+    _gp_link(links, sub_size.outputs["Vector"], normalize.inputs[0])
+    _gp_link(links, normalize.outputs["Vector"], mix_a)
+    _gp_link(links, sep_orig.outputs["Z"], sky_test.inputs[0])
+    _gp_link(links, sky_test.outputs["Value"], mix_fac)
+    _gp_link(links, mix_out, sub_horizon.inputs[0])
+    _gp_link(links, horizon_in, sub_horizon.inputs[1])
+    _gp_link(links, sub_horizon.outputs["Vector"], vec_out)
 
-def _link_fake_ground_to_scene(context, obj: bpy.types.Object):
-    """Orphaned objects exist in bpy.data but are invisible — ensure scene membership."""
-    scene = getattr(context, "scene", None)
-    if scene is None:
-        return
-    if scene.objects.get(obj.name) is None:
-        try:
-            scene.collection.objects.link(obj)
-        except RuntimeError:
-            pass
-
-
-def _ensure_fake_ground_object(context):
-    obj = bpy.data.objects.get(_FAKE_GROUND_OBJ)
-    if obj is not None and obj.type == "MESH":
-        _link_fake_ground_to_scene(context, obj)
-        if len(obj.data.polygons) == 0:
-            _build_fake_ground_mesh(obj.data)
-        return obj
-
-    mesh = bpy.data.meshes.new(_FAKE_GROUND_OBJ + "_Mesh")
-    _build_fake_ground_mesh(mesh)
-    obj = bpy.data.objects.new(_FAKE_GROUND_OBJ, mesh)
-    col = getattr(context, "collection", None)
-    if col is None:
-        sc = getattr(context, "scene", None)
-        col = sc.collection if sc is not None else None
-    if col is not None:
-        try:
-            col.objects.link(obj)
-        except RuntimeError:
-            pass
-    _link_fake_ground_to_scene(context, obj)
-    return obj
+    return ng
 
 
-def _rebuild_fake_ground_material(
-    img: bpy.types.Image,
-    blur_amount: float,
-    mapping_src: bpy.types.Node,
-    mix_src: bpy.types.Node,
-    tint_mix_src: bpy.types.Node,
-    hue_sat_src: bpy.types.Node,
-    bg_src: bpy.types.Node,
+def _ensure_default_ground_projection_template() -> bpy.types.NodeTree | None:
+    """Load templates/ground_projection.blend or create the default group and save it."""
+    path = _default_ground_projection_blend_path()
+    ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
+    if ng is not None:
+        return ng
+    ng = _build_ground_projection_node_group_asset()
+    if not _ground_group_is_valid(ng):
+        return None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        bpy.data.libraries.write(path, {ng}, fake_user=True)
+    except Exception:
+        pass
+    return ng
+
+
+def _ensure_custom_ground_group_node(nt: bpy.types.NodeTree, ng: bpy.types.NodeTree) -> bpy.types.Node:
+    node = _find_node_by_label(nt.nodes, _CUSTOM_GROUND_GROUP_NAME)
+    if node is None:
+        node = nt.nodes.new("ShaderNodeGroup")
+        node.label = _CUSTOM_GROUND_GROUP_NAME
+        node.location = (-710, -560)
+    node.node_tree = ng
+    node.name = _CUSTOM_GROUND_GROUP_NAME
+    return node
+
+
+def _wire_custom_ground_group(
+    nt: bpy.types.NodeTree,
+    gp_node: bpy.types.Node,
+    *,
+    mapping_node: bpy.types.Node,
+    settings,
 ):
-    """Emissive ground using reflected environment lookup (mirror floor)."""
-    mat = bpy.data.materials.get(_FAKE_GROUND_MAT)
-    if mat is None:
-        mat = bpy.data.materials.new(_FAKE_GROUND_MAT)
-    mat.use_nodes = True
-    nt = mat.node_tree
+    links = nt.links
+    vec = mapping_node.outputs["Vector"]
+    _gp_link(links, vec, gp_node.inputs["Vector"])
+    gp_node.inputs["Size"].default_value = _ground_projection_size(settings)
+    gp_node.inputs["Horizon"].default_value = _ground_projection_horizon(settings)
+    gp_node.inputs["Rotation"].default_value = _ground_projection_rotation(mapping_node)
+    return gp_node.outputs.get("Vector") or gp_node.outputs[0]
+
+
+def _ensure_gp_mix_node(nodes):
+    label = f"{_HDRI_GP} Mix"
+    existing = _find_node_by_label(nodes, label)
+    if existing is not None and existing.bl_idname not in ("ShaderNodeMix", "ShaderNodeMixRGB"):
+        nodes.remove(existing)
+        existing = None
+    if existing is not None and existing.bl_idname == "ShaderNodeMixRGB":
+        return existing, existing.inputs["Color1"], existing.inputs["Color2"], existing.inputs["Fac"], existing.outputs["Color"]
+    if existing is not None:
+        try:
+            existing.data_type = "VECTOR"
+            existing.clamp_factor = False
+            return (
+                existing,
+                existing.inputs.get("A") or existing.inputs[6],
+                existing.inputs.get("B") or existing.inputs[7],
+                existing.inputs.get("Factor") or existing.inputs[0],
+                existing.outputs.get("Result") or existing.outputs.get("Vector") or existing.outputs[0],
+            )
+        except Exception:
+            nodes.remove(existing)
+    try:
+        mix = nodes.new("ShaderNodeMix")
+        mix.label = label
+        mix.data_type = "VECTOR"
+        mix.clamp_factor = False
+        return (
+            mix,
+            mix.inputs.get("A") or mix.inputs[6],
+            mix.inputs.get("B") or mix.inputs[7],
+            mix.inputs.get("Factor") or mix.inputs[0],
+            mix.outputs.get("Vector") or mix.outputs[0],
+        )
+    except Exception:
+        mix = nodes.new("ShaderNodeMixRGB")
+        mix.label = label
+        return mix, mix.inputs["Color1"], mix.inputs["Color2"], mix.inputs["Fac"], mix.outputs["Color"]
+
+
+def _ensure_ground_projection_output(nt: bpy.types.NodeTree, *, mapping_node, settings):
+    """Return ground projection vector output — custom saved group or built-in inline chain."""
+    custom_ng = _resolve_custom_ground_group()
+    if custom_ng is not None:
+        _clear_inline_ground_nodes(nt)
+        gp_node = _ensure_custom_ground_group_node(nt, custom_ng)
+        output = _wire_custom_ground_group(nt, gp_node, mapping_node=mapping_node, settings=settings)
+        return output
+    _clear_world_ground_group_node(nt)
+    block = _ensure_ground_projection_chain(nt)
+    _wire_ground_projection_externals(nt, block, mapping_node=mapping_node, settings=settings)
+    return block["output"]
+
+
+def _ensure_ground_projection_chain(nt: bpy.types.NodeTree) -> dict:
+    """Full Easy HDRI ground projection node chain, inline in the world tree."""
+    _remove_broken_ground_group_nodes(nt)
     nodes = nt.nodes
     links = nt.links
-    nodes.clear()
 
-    out = nodes.new("ShaderNodeOutputMaterial")
-    out.location = (500, 0)
+    vtransform = _gp_get(nodes, "Transform", "ShaderNodeVectorTransform")
+    vtransform.vector_type = "POINT"
+    vtransform.convert_from = "CAMERA"
+    vtransform.convert_to = "WORLD"
+    vtransform.location = (-1166, -560)
 
-    try:
-        geom = nodes.new("ShaderNodeNewGeometry")
-    except (RuntimeError, TypeError):
-        geom = nodes.new("ShaderNodeGeometry")
-    geom.location = (-900, 0)
+    vrotate = _gp_get(nodes, "Rotate", "ShaderNodeVectorRotate")
+    vrotate.rotation_type = "EULER_XYZ"
+    vrotate.invert = True
+    vrotate.inputs["Center"].default_value = (0.0, 0.0, 0.0)
+    vrotate.location = (-936, -560)
 
-    invert_in = nodes.new("ShaderNodeVectorMath")
-    invert_in.location = (-700, 0)
-    invert_in.operation = "MULTIPLY"
-    invert_in.inputs[1].default_value = (-1.0, -1.0, -1.0)
+    sep_rot = _gp_get(nodes, "Sep Rot", "ShaderNodeSeparateXYZ")
+    sep_rot.location = (-690, -560)
 
-    reflect = nodes.new("ShaderNodeVectorMath")
-    reflect.location = (-500, 0)
-    reflect.operation = "REFLECT"
-    reflect.inputs[1].default_value = (0.0, 0.0, 1.0)
+    dot_down = _gp_get(nodes, "Dot Down", "ShaderNodeVectorMath")
+    dot_down.operation = "DOT_PRODUCT"
+    dot_down.inputs[1].default_value = (0.0, 0.0, -1.0)
+    dot_down.location = (-872, -760)
 
-    mapping = nodes.new("ShaderNodeMapping")
-    mapping.location = (-300, 0)
-    rot = mapping_src.inputs["Rotation"].default_value
-    loc = mapping_src.inputs["Location"].default_value
-    scl = mapping_src.inputs["Scale"].default_value
-    mapping.inputs["Location"].default_value[0] = loc[0]
-    mapping.inputs["Location"].default_value[1] = loc[1]
-    mapping.inputs["Location"].default_value[2] = loc[2]
-    mapping.inputs["Rotation"].default_value[0] = rot[0]
-    mapping.inputs["Rotation"].default_value[1] = rot[1]
-    mapping.inputs["Rotation"].default_value[2] = rot[2]
-    mapping.inputs["Scale"].default_value[0] = scl[0]
-    mapping.inputs["Scale"].default_value[1] = scl[1]
-    mapping.inputs["Scale"].default_value[2] = scl[2]
+    ratio = _gp_get(nodes, "Ratio", "ShaderNodeMath")
+    ratio.operation = "DIVIDE"
+    ratio.use_clamp = False
+    ratio.location = (-446, -560)
 
-    env = nodes.new("ShaderNodeTexEnvironment")
-    env.location = (-100, 80)
-    env.image = img
+    scale_vec = _gp_get(nodes, "Scale", "ShaderNodeVectorMath")
+    scale_vec.operation = "SCALE"
+    scale_vec.location = (-202, -560)
 
-    env_blur = nodes.new("ShaderNodeTexEnvironment")
-    env_blur.location = (-100, -120)
-    env_blur.image = _blur_image_copy(img, blur_amount)
-    env_blur.label = "HDRI Blur Source"
+    add_vec = _gp_get(nodes, "Add", "ShaderNodeVectorMath")
+    add_vec.operation = "ADD"
+    add_vec.location = (42, -560)
 
-    mix = nodes.new("ShaderNodeMixRGB")
-    mix.location = (120, -40)
-    mix.blend_type = "MIX"
-    mix.inputs["Fac"].default_value = mix_src.inputs["Fac"].default_value
+    sub_size = _gp_get(nodes, "Sub Size", "ShaderNodeVectorMath")
+    sub_size.operation = "SUBTRACT"
+    sub_size.location = (287, -560)
 
-    hue_sat = nodes.new("ShaderNodeHueSaturation")
-    hue_sat.location = (300, -40)
-    hue_sat.inputs["Hue"].default_value = hue_sat_src.inputs["Hue"].default_value
-    hue_sat.inputs["Saturation"].default_value = hue_sat_src.inputs["Saturation"].default_value
+    normalize = _gp_get(nodes, "Normalize", "ShaderNodeVectorMath")
+    normalize.operation = "NORMALIZE"
+    normalize.location = (531, -560)
 
-    tint_mix = nodes.new("ShaderNodeMixRGB")
-    tint_mix.location = (360, -40)
-    tint_mix.blend_type = "MIX"
-    tint_mix.inputs["Fac"].default_value = tint_mix_src.inputs["Fac"].default_value
-    tint_color = tint_mix_src.inputs["Color2"].default_value
-    tint_mix.inputs["Color2"].default_value = (tint_color[0], tint_color[1], tint_color[2], 1.0)
+    sep_orig = _gp_get(nodes, "Sep Orig", "ShaderNodeSeparateXYZ")
+    sep_orig.location = (286, -760)
 
-    emit = nodes.new("ShaderNodeEmission")
-    emit.location = (520, 0)
-    emit.inputs["Strength"].default_value = bg_src.inputs["Strength"].default_value
+    sky_test = _gp_get(nodes, "Sky Test", "ShaderNodeMath")
+    sky_test.operation = "GREATER_THAN"
+    sky_test.inputs[1].default_value = 0.0
+    sky_test.location = (531, -760)
 
-    links.new(geom.outputs["Incoming"], invert_in.inputs[0])
-    links.new(invert_in.outputs["Vector"], reflect.inputs[0])
-    links.new(reflect.outputs["Vector"], mapping.inputs["Vector"])
-    links.new(mapping.outputs["Vector"], env.inputs["Vector"])
-    links.new(mapping.outputs["Vector"], env_blur.inputs["Vector"])
-    links.new(env.outputs["Color"], mix.inputs["Color1"])
-    links.new(env_blur.outputs["Color"], mix.inputs["Color2"])
-    links.new(mix.outputs["Color"], hue_sat.inputs["Color"])
-    links.new(hue_sat.outputs["Color"], tint_mix.inputs["Color1"])
-    links.new(tint_mix.outputs["Color"], emit.inputs["Color"])
-    links.new(emit.outputs["Emission"], out.inputs["Surface"])
+    mix, mix_a, mix_b, mix_fac, mix_out = _ensure_gp_mix_node(nodes)
+    mix.location = (776, -560)
 
-    return mat
+    sub_horizon = _gp_get(nodes, "Sub Horizon", "ShaderNodeVectorMath")
+    sub_horizon.operation = "SUBTRACT"
+    sub_horizon.location = (1020, -560)
+
+    # Internal wiring (fixed topology — matches Easy HDRI Ground Projection group)
+    _gp_link(links, vtransform.outputs["Vector"], vrotate.inputs["Vector"])
+    _gp_link(links, vrotate.outputs["Vector"], sep_rot.inputs["Vector"])
+    _gp_link(links, sep_rot.outputs["Z"], ratio.inputs[0])
+    _gp_link(links, dot_down.outputs["Value"], ratio.inputs[1])
+    _gp_link(links, ratio.outputs["Value"], scale_vec.inputs["Scale"])
+    _gp_link(links, scale_vec.outputs["Vector"], add_vec.inputs[0])
+    _gp_link(links, vrotate.outputs["Vector"], add_vec.inputs[1])
+    _gp_link(links, add_vec.outputs["Vector"], sub_size.inputs[0])
+    _gp_link(links, sub_size.outputs["Vector"], normalize.inputs[0])
+    _gp_link(links, normalize.outputs["Vector"], mix_a)
+    _gp_link(links, sep_orig.outputs["Z"], sky_test.inputs[0])
+    _gp_link(links, sky_test.outputs["Value"], mix_fac)
+    _gp_link(links, mix_out, sub_horizon.inputs[0])
+
+    return {
+        "vtransform": vtransform,
+        "vrotate": vrotate,
+        "dot_down": dot_down,
+        "scale_vec": scale_vec,
+        "sep_orig": sep_orig,
+        "mix_b": mix_b,
+        "sub_size": sub_size,
+        "sub_horizon": sub_horizon,
+        "output": sub_horizon.outputs["Vector"],
+    }
 
 
-def _apply_fake_ground(
-    context,
-    settings,
-    img: bpy.types.Image,
+def _ground_projection_size(settings) -> tuple[float, float, float]:
+    size_z = max(0.5, float(settings.fake_ground_lift) * 20.0)
+    return (0.0, 0.0, size_z)
+
+
+def _ground_projection_horizon(settings) -> tuple[float, float, float]:
+    return (0.0, 0.0, float(settings.fake_ground_z_offset))
+
+
+def _ground_projection_rotation(mapping_node: bpy.types.Node) -> tuple[float, float, float]:
+    rot = mapping_node.inputs["Rotation"].default_value
+    return (float(rot[0]), float(rot[1]), float(rot[2]))
+
+
+def _wire_ground_projection_externals(
+    nt: bpy.types.NodeTree,
+    block: dict,
+    *,
     mapping_node: bpy.types.Node,
-    mix_node: bpy.types.Node,
-    tint_mix_node: bpy.types.Node,
-    hue_sat_node: bpy.types.Node,
-    bg_node: bpy.types.Node,
-):
-    obj = _ensure_fake_ground_object(context)
-    mat = _rebuild_fake_ground_material(
-        img,
-        settings.blur_amount,
-        mapping_src=mapping_node,
-        mix_src=mix_node,
-        tint_mix_src=tint_mix_node,
-        hue_sat_src=hue_sat_node,
-        bg_src=bg_node,
-    )
-    if obj.data.materials:
-        obj.data.materials[0] = mat
+    settings,
+) -> None:
+    """Connect mapping vector + Size / Horizon / Rotation inputs to the chain."""
+    links = nt.links
+    vec = mapping_node.outputs["Vector"]
+    _gp_link(links, vec, block["vtransform"].inputs[0])
+    _gp_link(links, vec, block["dot_down"].inputs[0])
+    _gp_link(links, vec, block["scale_vec"].inputs[0])
+    _gp_link(links, vec, block["sep_orig"].inputs["Vector"])
+    _gp_link(links, vec, block["mix_b"])
+    block["sub_size"].inputs[1].default_value = _ground_projection_size(settings)
+    block["sub_horizon"].inputs[1].default_value = _ground_projection_horizon(settings)
+    block["vrotate"].inputs["Rotation"].default_value = _ground_projection_rotation(mapping_node)
+
+
+def _route_ground_projected_vector(
+    nt: bpy.types.NodeTree,
+    *,
+    env_projected_node: bpy.types.Node,
+    mapping_node: bpy.types.Node,
+    ground_out,
+    enabled: bool,
+) -> None:
+    links = nt.links
+    for link in list(env_projected_node.inputs["Vector"].links):
+        links.remove(link)
+
+    if enabled and ground_out is not None:
+        links.new(ground_out, env_projected_node.inputs["Vector"])
     else:
-        obj.data.materials.append(mat)
+        links.new(mapping_node.outputs["Vector"], env_projected_node.inputs["Vector"])
 
-    obj.location = (0.0, 0.0, float(settings.fake_ground_z_offset))
-    s = float(settings.fake_ground_size) / 2.0
-    obj.scale = (s, s, 1.0)
 
-    obj.hide_viewport = False
-    obj.hide_render = False
+def _apply_world_ground_projection(world: bpy.types.World, settings, *, enabled: bool) -> None:
+    nodes = _ensure_world_nodes(world)
+    nt = nodes["nt"]
+    mapping = nodes["mapping"]
+    ground_mix = nodes["ground_mix"]
+    _set_fake_ground_visible(False)
+
+    ground_mix.inputs["Fac"].default_value = 1.0 if enabled else 0.0
+
+    ground_out = _ensure_ground_projection_output(nt, mapping_node=mapping, settings=settings)
+    _route_ground_projected_vector(
+        nt,
+        env_projected_node=nodes["env_projected"],
+        mapping_node=mapping,
+        ground_out=ground_out if enabled else None,
+        enabled=enabled,
+    )
 
 
 def _apply_look_controls_to_nodes(
@@ -515,30 +875,22 @@ def _sync_world_and_ground_look(context, settings):
         nodes["hue_sat"],
         nodes["bg"],
     )
-    _refresh_hdri_blur_images(settings, nodes["env"], nodes["env_blur"])
+    _refresh_hdri_blur_images(settings, nodes["env"], nodes["env_blur"], nodes["env_projected"])
 
     img = nodes["env"].image
-    if settings.fake_ground and img is not None:
-        _apply_fake_ground(
-            context,
-            settings,
-            img,
-            nodes["mapping"],
-            nodes["mix"],
-            nodes["tint_mix"],
-            nodes["hue_sat"],
-            nodes["bg"],
-        )
-    else:
-        _set_fake_ground_visible(False)
+    _apply_world_ground_projection(scene.world, settings, enabled=bool(settings.fake_ground and img is not None))
 
 
-def _refresh_hdri_blur_images(settings, env_node, env_blur_node):
+def _refresh_hdri_blur_images(settings, env_node, env_blur_node, env_projected_node=None):
     src = env_node.image
     if src is None:
         env_blur_node.image = None
+        if env_projected_node is not None:
+            env_projected_node.image = None
         return
     env_blur_node.image = _blur_image_copy(src, settings.blur_amount)
+    if env_projected_node is not None:
+        env_projected_node.image = src
 
 
 def _update_look_controls(self, context):
@@ -818,6 +1170,7 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
         nodes = _ensure_world_nodes(world)
         env_node = nodes["env"]
         env_blur_node = nodes["env_blur"]
+        env_projected_node = nodes["env_projected"]
         mix_node = nodes["mix"]
         tint_mix_node = nodes["tint_mix"]
         hue_sat_node = nodes["hue_sat"]
@@ -826,7 +1179,7 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
 
         img = bpy.data.images.load(image_path, check_existing=True)
         _set_env_image_colorspace(img)
-        _assign_hdri_images(env_node, env_blur_node, img, settings.blur_amount)
+        _assign_hdri_images(env_node, env_blur_node, env_projected_node, img, settings.blur_amount)
 
         _apply_look_controls_to_nodes(
             settings,
@@ -840,19 +1193,11 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
         if settings.add_preview_sphere:
             _ensure_preview_sphere()
 
-        if settings.fake_ground:
-            _apply_fake_ground(
-                context,
-                settings,
-                img,
-                mapping_node,
-                mix_node,
-                tint_mix_node,
-                hue_sat_node,
-                bg_node,
-            )
-        else:
-            _set_fake_ground_visible(False)
+        _apply_world_ground_projection(
+            world,
+            settings,
+            enabled=bool(settings.fake_ground and img is not None),
+        )
     except Exception as e:
         return False, f"Failed to apply HDRI: {e}"
     return True, "HDRI applied to World."
@@ -1129,6 +1474,80 @@ def _update_placement_controls(self, context):
     _refresh_placement_preview(self, context)
 
 
+class HDRI_OT_save_ground_projection(Operator):
+    bl_idname = "hdri.save_ground_projection"
+    bl_label = "Save Ground Template"
+    bl_description = (
+        "Save the node group 'HDRI Ground Projection' from this file to the addon templates folder"
+    )
+
+    def execute(self, context):
+        ng = bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME)
+        if ng is None:
+            self.report(
+                {"ERROR"},
+                f'Create a node group named "{_CUSTOM_GROUND_GROUP_NAME}" first (see addon help).',
+            )
+            return {"CANCELLED"}
+        if not _ground_group_is_valid(ng):
+            self.report(
+                {"ERROR"},
+                "Group needs inputs Vector, Size, Horizon, Rotation and output Vector.",
+            )
+            return {"CANCELLED"}
+        path = _default_ground_projection_blend_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        bpy.data.libraries.write(path, {ng}, fake_user=True)
+        prefs = _addon_prefs()
+        prefs.ground_projection_blend = path
+        prefs.use_custom_ground_projection = True
+        self.report({"INFO"}, f"Saved ground template to {path}")
+        return {"FINISHED"}
+
+
+class HDRI_OT_reload_ground_projection(Operator):
+    bl_idname = "hdri.reload_ground_projection"
+    bl_label = "Reload Ground Template"
+    bl_description = "Reload the ground projection node group from the template blend file"
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        path = (prefs.ground_projection_blend or "").strip() or _default_ground_projection_blend_path()
+        if bpy.data.node_groups.get(_CUSTOM_GROUND_GROUP_NAME) is not None:
+            bpy.data.node_groups.remove(bpy.data.node_groups[_CUSTOM_GROUND_GROUP_NAME])
+        ng = _load_ground_group_from_blend(path, _CUSTOM_GROUND_GROUP_NAME)
+        if ng is None:
+            self.report({"ERROR"}, f"Could not load a valid group from {path}")
+            return {"CANCELLED"}
+        prefs.use_custom_ground_projection = True
+        if context.scene.world is not None:
+            _apply_world_ground_projection(
+                context.scene.world,
+                context.scene.hdri_api_settings,
+                enabled=bool(context.scene.hdri_api_settings.fake_ground),
+            )
+        self.report({"INFO"}, f"Loaded {_CUSTOM_GROUND_GROUP_NAME}")
+        return {"FINISHED"}
+
+
+class HDRI_OT_reset_ground_projection(Operator):
+    bl_idname = "hdri.reset_ground_projection"
+    bl_label = "Use Built-in Ground"
+    bl_description = "Switch back to the addon's built-in inline ground projection nodes"
+
+    def execute(self, context):
+        prefs = _addon_prefs()
+        prefs.use_custom_ground_projection = False
+        if context.scene.world is not None:
+            _apply_world_ground_projection(
+                context.scene.world,
+                context.scene.hdri_api_settings,
+                enabled=bool(context.scene.hdri_api_settings.fake_ground),
+            )
+        self.report({"INFO"}, "Using built-in ground projection nodes")
+        return {"FINISHED"}
+
+
 class HDRI_API_Preferences(AddonPreferences):
     bl_idname = __name__
 
@@ -1165,6 +1584,20 @@ class HDRI_API_Preferences(AddonPreferences):
         min=5.0,
         max=600.0,
     )
+    use_custom_ground_projection: BoolProperty(
+        name="Use custom ground projection",
+        description="Use the HDRI Ground Projection node group (templates/ground_projection.blend)",
+        default=True,
+    )
+    ground_projection_blend: StringProperty(
+        name="Ground projection template",
+        description=(
+            "Blend file with node group 'HDRI Ground Projection'. "
+            "Leave empty to use the addon default under templates/"
+        ),
+        default="",
+        subtype="FILE_PATH",
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -1179,6 +1612,14 @@ class HDRI_API_Preferences(AddonPreferences):
         layout.prop(self, "checkout_package_id")
         layout.prop(self, "timeout_s")
         layout.operator("hdri.buy_tokens", icon="FUND")
+        box = layout.box()
+        box.label(text="Ground projection template", icon="NODETREE")
+        box.prop(self, "use_custom_ground_projection")
+        box.prop(self, "ground_projection_blend")
+        row = box.row(align=True)
+        row.operator("hdri.save_ground_projection", icon="EXPORT")
+        row.operator("hdri.reload_ground_projection", icon="FILE_REFRESH")
+        row.operator("hdri.reset_ground_projection", icon="LOOP_BACK")
 
 
 class HDRI_API_Settings(PropertyGroup):
@@ -1346,36 +1787,28 @@ class HDRI_API_Settings(PropertyGroup):
     fake_ground: BoolProperty(
         name="Fake ground plane",
         description=(
-            "Adds a large emissive floor that projects the lower part of the HDRI so the "
-            "environment reads as 3D ground + sky instead of a floating bubble"
+            "Project the HDRI ground below the horizon using a circular shader falloff (no geometry). "
+            "Mixes projected ground samples into the blurred environment branch"
         ),
         default=False,
         update=_update_look_controls,
     )
-    fake_ground_size: FloatProperty(
-        name="Ground size",
-        description="Edge length of the ground plane (scene units)",
-        default=100.0,
-        min=1.0,
-        soft_max=1000.0,
-        update=_update_look_controls,
-    )
     fake_ground_z_offset: FloatProperty(
-        name="Ground Z",
-        description="Height of the plane (Z-up). Slightly below 0 avoids z-fighting with the grid",
-        default=-0.01,
+        name="Horizon offset",
+        description="Horizon vector Z subtracted after ground projection (Easy HDRI Horizon input)",
+        default=0.0,
         min=-1000.0,
         max=1000.0,
         update=_update_look_controls,
     )
     fake_ground_lift: FloatProperty(
-        name="Projection lift",
+        name="Ground size",
         description=(
-            "Virtual Z used when sampling the panorama from the plane (higher = horizon "
-            "reaches the edges sooner; tweak if the floor looks too sky-like or too dark)"
+            "Ground projection Size Z — distance of the virtual floor below the camera "
+            "(Easy HDRI default is 20; this slider multiplies that value)"
         ),
         default=1.0,
-        min=0.01,
+        min=0.05,
         soft_max=10.0,
         update=_update_look_controls,
     )
@@ -1393,7 +1826,7 @@ class HDRI_API_Settings(PropertyGroup):
     panorama_prompt: StringProperty(
         name="Extra prompt",
         description=(
-            "Optional style/scene hints added to the required ERP outpaint prompt "
+            "Optional style/scene hints prepended before the required ERP outpaint prompt "
             "(seamless 360°, horizon level, edge match). Leave empty for defaults only"
         ),
         default="",
@@ -2511,8 +2944,22 @@ class HDRI_PT_panel(Panel):
         col.prop(s, "fake_ground")
         fg = col.column(align=True)
         fg.enabled = s.fake_ground
-        fg.prop(s, "fake_ground_size")
         fg.prop(s, "fake_ground_z_offset")
+        fg.prop(s, "fake_ground_lift")
+        gp_box = col.box()
+        gp_box.label(text="Custom ground node group", icon="NODETREE")
+        prefs = _addon_prefs()
+        if prefs.use_custom_ground_projection:
+            gp_box.label(text="Mode: saved template", icon="CHECKMARK")
+        else:
+            gp_box.label(text="Mode: built-in inline nodes", icon="INFO")
+        row = gp_box.row(align=True)
+        row.operator(HDRI_OT_save_ground_projection.bl_idname, text="Save template")
+        row.operator(HDRI_OT_reload_ground_projection.bl_idname, text="", icon="FILE_REFRESH")
+        gp_box.operator(HDRI_OT_reset_ground_projection.bl_idname, text="Use built-in nodes")
+        gp_box.label(text="1. Clean up nodes → Ctrl+G → name group", icon="BLANK1")
+        gp_box.label(text='2. "HDRI Ground Projection" + Vector/Size/Horizon/Rotation', icon="BLANK1")
+        gp_box.label(text="3. Save template → commit templates/ground_projection.blend", icon="BLANK1")
 
         box = layout.box()
         row = box.row(align=True)
@@ -2581,7 +3028,7 @@ class HDRI_PT_panel(Panel):
         acct.operator("hdri.buy_tokens", icon="FUND")
 
         box.label(text="Panorama options")
-        box.label(text="Extra prompt is merged with required ERP outpaint instructions.", icon="INFO")
+        box.label(text="Extra prompt is prepended before required ERP outpaint instructions.", icon="INFO")
         col2 = box.column(align=True)
         col2.prop(s, "panorama_prompt")
         row = col2.row(align=True)
@@ -2607,6 +3054,9 @@ class HDRI_PT_panel(Panel):
 classes = (
     HDRI_API_Preferences,
     HDRI_API_Settings,
+    HDRI_OT_save_ground_projection,
+    HDRI_OT_reload_ground_projection,
+    HDRI_OT_reset_ground_projection,
     HDRI_OT_login_account,
     HDRI_OT_register_account,
     HDRI_OT_buy_tokens,
@@ -2625,6 +3075,7 @@ def register():
     for c in classes:
         bpy.utils.register_class(c)
     bpy.types.Scene.hdri_api_settings = PointerProperty(type=HDRI_API_Settings)
+    _ensure_default_ground_projection_template()
 
 
 def unregister():
