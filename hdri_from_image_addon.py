@@ -61,7 +61,178 @@ def _set_env_image_colorspace(img: bpy.types.Image):
             continue
 
 
-def _ensure_world_nodes(world: bpy.types.World):
+_HDRI_WORLD_GROUP = "HDRI World"
+
+
+def _find_tree_node(nt: bpy.types.NodeTree, label: str):
+    return _find_node_by_label(nt.nodes, label)
+
+
+def _cleanup_legacy_world_hdri_nodes(nt: bpy.types.NodeTree) -> None:
+    """Remove pre-group loose HDRI nodes from the world tree."""
+    for node in list(nt.nodes):
+        if node.type in ("OUTPUT_WORLD", "BACKGROUND"):
+            continue
+        if node.bl_idname == "ShaderNodeGroup" and node.label in (_HDRI_WORLD_GROUP, "HDRI Ground Projection"):
+            continue
+        if node.label.startswith("HDRI ") or node.label.startswith("HDRI GP"):
+            nt.nodes.remove(node)
+
+
+def _node_group_add_socket(ng: bpy.types.NodeTree, name: str, *, in_out: str, socket_type: str):
+    """Add a group interface socket (Blender 4+ interface or 3.x inputs/outputs)."""
+    if hasattr(ng, "interface"):
+        # Blender 5.x interface only exposes a small enum; euler rotation → Vector.
+        iface_type = socket_type
+        if socket_type in ("NodeSocketVectorEuler", "NodeSocketRotation"):
+            iface_type = "NodeSocketVector"
+        return ng.interface.new_socket(name, in_out=in_out, socket_type=iface_type)
+    if in_out == "INPUT":
+        return ng.inputs.new(socket_type, name)
+    return ng.outputs.new(socket_type, name)
+
+
+def _group_io_nodes(ng: bpy.types.NodeTree):
+    inp = next((n for n in ng.nodes if n.type == "GROUP_INPUT"), None)
+    if inp is None:
+        inp = ng.nodes.new("NodeGroupInput")
+        inp.location = (-1160, -240)
+    out = next((n for n in ng.nodes if n.type == "GROUP_OUTPUT"), None)
+    if out is None:
+        out = ng.nodes.new("NodeGroupOutput")
+        out.location = (1260, 60)
+    return inp, out
+
+
+def _build_hdri_world_shader_group() -> bpy.types.NodeTree | None:
+    """Single node group: mapping, env textures, ground projection, color post."""
+    groups = _node_groups()
+    if groups is None:
+        return None
+
+    ng = groups.new(_HDRI_WORLD_GROUP, "ShaderNodeTree")
+    _node_group_add_socket(ng, "Rotation", in_out="INPUT", socket_type="NodeSocketVectorEuler")
+    _node_group_add_socket(ng, "Size", in_out="INPUT", socket_type="NodeSocketVector")
+    _node_group_add_socket(ng, "Horizon", in_out="INPUT", socket_type="NodeSocketVector")
+    _node_group_add_socket(ng, "Ground Project", in_out="INPUT", socket_type="NodeSocketFloat")
+    _node_group_add_socket(ng, "Blur", in_out="INPUT", socket_type="NodeSocketFloat")
+    _node_group_add_socket(ng, "Color", in_out="OUTPUT", socket_type="NodeSocketColor")
+
+    nodes = ng.nodes
+    links = ng.links
+    gi, go = _group_io_nodes(ng)
+    gi.location = (-1200, 0)
+    go.location = (500, 100)
+
+    rot_in = gi.outputs.get("Rotation") or gi.outputs[0]
+    size_in = gi.outputs.get("Size") or gi.outputs[1]
+    horizon_in = gi.outputs.get("Horizon") or gi.outputs[2]
+    ground_fac_in = gi.outputs.get("Ground Project") or gi.outputs[3]
+    blur_in = gi.outputs.get("Blur") or gi.outputs[4]
+    color_out = go.inputs.get("Color") or go.inputs[0]
+
+    texcoord = nodes.new("ShaderNodeTexCoord")
+    texcoord.label = "HDRI TexCoord"
+    texcoord.location = (-1050, 100)
+
+    mapping = nodes.new("ShaderNodeMapping")
+    mapping.label = "HDRI Mapping"
+    mapping.vector_type = "TEXTURE"
+    mapping.location = (-850, 100)
+
+    env = nodes.new("ShaderNodeTexEnvironment")
+    env.label = "HDRI Environment"
+    env.location = (-550, 280)
+
+    env_blur = nodes.new("ShaderNodeTexEnvironment")
+    env_blur.label = "HDRI Blur Source"
+    env_blur.location = (-550, 100)
+
+    env_projected = nodes.new("ShaderNodeTexEnvironment")
+    env_projected.label = "HDRI Ground Projected"
+    env_projected.location = (-550, -120)
+
+    gp_ng = _ensure_default_ground_projection_template() or _build_ground_projection_node_group_asset()
+    gp_node = nodes.new("ShaderNodeGroup")
+    gp_node.label = _CUSTOM_GROUND_GROUP_NAME
+    gp_node.location = (-850, -120)
+    if gp_ng is not None:
+        gp_node.node_tree = gp_ng
+
+    ground_mix = nodes.new("ShaderNodeMixRGB")
+    ground_mix.label = "HDRI Ground Mix"
+    ground_mix.blend_type = "MIX"
+    ground_mix.location = (-280, -40)
+
+    mix = nodes.new("ShaderNodeMixRGB")
+    mix.label = "HDRI Blur Mix"
+    mix.blend_type = "MIX"
+    mix.location = (-280, 180)
+
+    hue_sat = nodes.new("ShaderNodeHueSaturation")
+    hue_sat.label = "HDRI Hue Saturation"
+    hue_sat.location = (-40, 180)
+
+    tint_mix = nodes.new("ShaderNodeMixRGB")
+    tint_mix.label = "HDRI Tint Mix"
+    tint_mix.blend_type = "MIX"
+    tint_mix.inputs["Color2"].default_value = (1.0, 1.0, 1.0, 1.0)
+    tint_mix.location = (160, 180)
+
+    mapping_vector = mapping.outputs["Vector"]
+    _gp_link(links, texcoord.outputs["Generated"], mapping.inputs["Vector"])
+    _gp_link(links, rot_in, mapping.inputs["Rotation"])
+    _gp_link(links, mapping_vector, env.inputs["Vector"])
+    _gp_link(links, mapping_vector, env_blur.inputs["Vector"])
+    _gp_link(links, mapping_vector, gp_node.inputs["Vector"])
+    _gp_link(links, rot_in, gp_node.inputs["Rotation"])
+    _gp_link(links, size_in, gp_node.inputs["Size"])
+    _gp_link(links, horizon_in, gp_node.inputs["Horizon"])
+    _gp_link(links, gp_node.outputs.get("Vector") or gp_node.outputs[0], env_projected.inputs["Vector"])
+    _gp_link(links, env.outputs["Color"], mix.inputs["Color1"])
+    _gp_link(links, env_blur.outputs["Color"], ground_mix.inputs["Color1"])
+    _gp_link(links, env_projected.outputs["Color"], ground_mix.inputs["Color2"])
+    _gp_link(links, ground_mix.outputs["Color"], mix.inputs["Color2"])
+    _gp_link(links, mix.outputs["Color"], hue_sat.inputs["Color"])
+    _gp_link(links, hue_sat.outputs["Color"], tint_mix.inputs["Color1"])
+    _gp_link(links, tint_mix.outputs["Color"], color_out)
+    _gp_link(links, ground_fac_in, ground_mix.inputs["Fac"])
+    _gp_link(links, blur_in, mix.inputs["Fac"])
+
+    return ng
+
+
+def _ensure_hdri_world_shader_group() -> bpy.types.NodeTree | None:
+    groups = _node_groups()
+    if groups is None:
+        return None
+    ng = groups.get(_HDRI_WORLD_GROUP)
+    if ng is not None and _find_tree_node(ng, "HDRI Environment") is not None:
+        return ng
+    if ng is not None:
+        groups.remove(ng)
+    return _build_hdri_world_shader_group()
+
+
+def _world_nodes_dict(nt: bpy.types.NodeTree, group_tree: bpy.types.NodeTree, group_node: bpy.types.Node) -> dict:
+    return {
+        "nt": nt,
+        "group": group_node,
+        "group_tree": group_tree,
+        "env": _find_tree_node(group_tree, "HDRI Environment"),
+        "env_blur": _find_tree_node(group_tree, "HDRI Blur Source"),
+        "env_projected": _find_tree_node(group_tree, "HDRI Ground Projected"),
+        "ground_mix": _find_tree_node(group_tree, "HDRI Ground Mix"),
+        "mix": _find_tree_node(group_tree, "HDRI Blur Mix"),
+        "tint_mix": _find_tree_node(group_tree, "HDRI Tint Mix"),
+        "hue_sat": _find_tree_node(group_tree, "HDRI Hue Saturation"),
+        "mapping": _find_tree_node(group_tree, "HDRI Mapping"),
+        "texcoord": _find_tree_node(group_tree, "HDRI TexCoord"),
+        "ground_proj": _find_tree_node(group_tree, _CUSTOM_GROUND_GROUP_NAME),
+    }
+
+
+def _ensure_world_nodes_flat(world: bpy.types.World) -> dict:
     world.use_nodes = True
     nt = world.node_tree
     nodes = nt.nodes
@@ -195,6 +366,8 @@ def _ensure_world_nodes(world: bpy.types.World):
 
     return {
         "nt": nt,
+        "group": None,
+        "group_tree": nt,
         "env": env,
         "env_blur": env_blur,
         "env_projected": env_projected,
@@ -205,7 +378,54 @@ def _ensure_world_nodes(world: bpy.types.World):
         "bg": bg,
         "mapping": mapping,
         "texcoord": texcoord,
+        "ground_proj": _find_tree_node(nt, _CUSTOM_GROUND_GROUP_NAME),
     }
+
+
+def _ensure_world_nodes(world: bpy.types.World):
+    world.use_nodes = True
+    nt = world.node_tree
+    nodes = nt.nodes
+    links = nt.links
+
+    out = next((n for n in nodes if n.type == "OUTPUT_WORLD"), None)
+    if out is None:
+        out = nodes.new("ShaderNodeOutputWorld")
+        out.location = (500, 0)
+
+    bg = next((n for n in nodes if n.type == "BACKGROUND"), None)
+    if bg is None:
+        bg = nodes.new("ShaderNodeBackground")
+        bg.location = (300, 0)
+
+    if not bg.outputs["Background"].is_linked:
+        links.new(bg.outputs["Background"], out.inputs["Surface"])
+
+    group_tree = _ensure_hdri_world_shader_group()
+    if group_tree is not None:
+        _cleanup_legacy_world_hdri_nodes(nt)
+        group_node = _find_tree_node(nt, _HDRI_WORLD_GROUP)
+        if group_node is None:
+            group_node = nodes.new("ShaderNodeGroup")
+            group_node.label = _HDRI_WORLD_GROUP
+            group_node.name = _HDRI_WORLD_GROUP
+            group_node.location = (0, 0)
+        group_node.node_tree = group_tree
+        group_node.width = 280
+        for link in list(bg.inputs["Color"].links):
+            links.remove(link)
+        color_out = group_node.outputs.get("Color") or group_node.outputs[0]
+        links.new(color_out, bg.inputs["Color"])
+        result = _world_nodes_dict(nt, group_tree, group_node)
+        result["bg"] = bg
+        return result
+
+    flat = _ensure_world_nodes_flat(world)
+    flat["bg"] = bg
+    for link in list(bg.inputs["Color"].links):
+        links.remove(link)
+    links.new(flat["tint_mix"].outputs["Color"], bg.inputs["Color"])
+    return flat
 
 
 def _ensure_cycles():
@@ -399,6 +619,9 @@ def _clear_inline_ground_nodes(nt: bpy.types.NodeTree) -> None:
 
 
 def _clear_world_ground_group_node(nt: bpy.types.NodeTree) -> None:
+    """Remove standalone ground group nodes (flat layout fallback only)."""
+    if getattr(nt, "name", "") == _HDRI_WORLD_GROUP:
+        return
     for node in list(nt.nodes):
         if node.bl_idname == "ShaderNodeGroup" and node.label == _CUSTOM_GROUND_GROUP_NAME:
             nt.nodes.remove(node)
@@ -689,9 +912,12 @@ def _ensure_ground_projection_output(nt: bpy.types.NodeTree, *, mapping_node, se
     custom_ng = _resolve_custom_ground_group()
     if custom_ng is not None:
         _clear_inline_ground_nodes(nt)
-        gp_node = _ensure_custom_ground_group_node(nt, custom_ng)
-        output = _wire_custom_ground_group(nt, gp_node, mapping_node=mapping_node, settings=settings)
-        return output
+        gp_node = _find_tree_node(nt, _CUSTOM_GROUND_GROUP_NAME)
+        if gp_node is None:
+            gp_node = _ensure_custom_ground_group_node(nt, custom_ng)
+        else:
+            gp_node.node_tree = custom_ng
+        return _wire_custom_ground_group(nt, gp_node, mapping_node=mapping_node, settings=settings)
     _clear_world_ground_group_node(nt)
     block = _ensure_ground_projection_chain(nt)
     _wire_ground_projection_externals(nt, block, mapping_node=mapping_node, settings=settings)
@@ -840,22 +1066,64 @@ def _route_ground_projected_vector(
         links.new(mapping_node.outputs["Vector"], env_projected_node.inputs["Vector"])
 
 
+def _set_world_group_inputs(group_node: bpy.types.Node, settings, *, fake_ground: bool) -> None:
+    if group_node is None:
+        return
+    if "Size" in group_node.inputs:
+        group_node.inputs["Size"].default_value = _ground_projection_size(settings)
+    if "Horizon" in group_node.inputs:
+        group_node.inputs["Horizon"].default_value = _ground_projection_horizon(settings)
+    if "Ground Project" in group_node.inputs:
+        group_node.inputs["Ground Project"].default_value = 1.0 if fake_ground else 0.0
+    if "Blur" in group_node.inputs:
+        group_node.inputs["Blur"].default_value = (
+            1.0 if fake_ground else float(settings.blur_amount)
+        )
+
+
+def _apply_world_mix_factors(settings, mix_node, ground_mix_node, *, fake_ground: bool) -> None:
+    """Blur mix Fac=0 hid the ground branch; when ground is on, use the projected path."""
+    if ground_mix_node is not None:
+        ground_mix_node.inputs["Fac"].default_value = 1.0 if fake_ground else 0.0
+    if mix_node is None:
+        return
+    if fake_ground:
+        mix_node.inputs["Fac"].default_value = 1.0
+    else:
+        mix_node.inputs["Fac"].default_value = float(settings.blur_amount)
+
+
 def _apply_world_ground_projection(world: bpy.types.World, settings, *, enabled: bool) -> None:
     nodes = _ensure_world_nodes(world)
-    nt = nodes["nt"]
+    nt = nodes["group_tree"]
     mapping = nodes["mapping"]
     ground_mix = nodes["ground_mix"]
+    mix_node = nodes["mix"]
+    group_inst = nodes.get("group")
     _set_fake_ground_visible(False)
 
-    ground_mix.inputs["Fac"].default_value = 1.0 if enabled else 0.0
+    fake_ground = bool(enabled)
+    _apply_world_mix_factors(settings, mix_node, ground_mix, fake_ground=fake_ground)
+
+    if group_inst is not None:
+        if "Size" in group_inst.inputs:
+            group_inst.inputs["Size"].default_value = _ground_projection_size(settings)
+        if "Horizon" in group_inst.inputs:
+            group_inst.inputs["Horizon"].default_value = _ground_projection_horizon(settings)
+        if "Ground Project" in group_inst.inputs:
+            group_inst.inputs["Ground Project"].default_value = 1.0 if fake_ground else 0.0
+        if "Blur" in group_inst.inputs:
+            group_inst.inputs["Blur"].default_value = (
+                1.0 if fake_ground else float(settings.blur_amount)
+            )
 
     ground_out = _ensure_ground_projection_output(nt, mapping_node=mapping, settings=settings)
     _route_ground_projected_vector(
         nt,
         env_projected_node=nodes["env_projected"],
         mapping_node=mapping,
-        ground_out=ground_out if enabled else None,
-        enabled=enabled,
+        ground_out=ground_out if fake_ground else None,
+        enabled=fake_ground,
     )
 
 
@@ -866,13 +1134,17 @@ def _apply_look_controls_to_nodes(
     tint_mix_node: bpy.types.Node,
     hue_sat_node: bpy.types.Node,
     bg_node: bpy.types.Node,
+    *,
+    ground_mix_node=None,
+    group_node=None,
+    fake_ground: bool = False,
 ):
     mapping_node.inputs["Rotation"].default_value[0] = settings.pitch_degrees * (3.141592653589793 / 180.0)
     mapping_node.inputs["Rotation"].default_value[1] = settings.roll_degrees * (3.141592653589793 / 180.0)
     mapping_node.inputs["Rotation"].default_value[2] = settings.yaw_degrees * (3.141592653589793 / 180.0)
     hue_sat_node.inputs["Hue"].default_value = 0.5 + settings.hue_shift
     hue_sat_node.inputs["Saturation"].default_value = settings.saturation
-    mix_node.inputs["Fac"].default_value = settings.blur_amount
+    _apply_world_mix_factors(settings, mix_node, ground_mix_node, fake_ground=fake_ground)
     bg_node.inputs["Strength"].default_value = settings.exposure * settings.post_exposure
 
     tint_mix_node.inputs["Fac"].default_value = settings.tint_strength
@@ -882,6 +1154,20 @@ def _apply_look_controls_to_nodes(
         settings.tint_color[2],
         1.0,
     )
+    if group_node is not None:
+        rot = mapping_node.inputs["Rotation"].default_value
+        if "Rotation" in group_node.inputs:
+            group_node.inputs["Rotation"].default_value = (rot[0], rot[1], rot[2])
+        if "Size" in group_node.inputs:
+            group_node.inputs["Size"].default_value = _ground_projection_size(settings)
+        if "Horizon" in group_node.inputs:
+            group_node.inputs["Horizon"].default_value = _ground_projection_horizon(settings)
+        if "Ground Project" in group_node.inputs:
+            group_node.inputs["Ground Project"].default_value = 1.0 if fake_ground else 0.0
+        if "Blur" in group_node.inputs:
+            group_node.inputs["Blur"].default_value = (
+                1.0 if fake_ground else float(settings.blur_amount)
+            )
 
 
 def _sync_world_and_ground_look(context, settings):
@@ -889,6 +1175,7 @@ def _sync_world_and_ground_look(context, settings):
     if scene is None or scene.world is None:
         return
     nodes = _ensure_world_nodes(scene.world)
+    fake_ground = bool(settings.fake_ground and nodes["env"].image is not None)
     _apply_look_controls_to_nodes(
         settings,
         nodes["mapping"],
@@ -896,11 +1183,13 @@ def _sync_world_and_ground_look(context, settings):
         nodes["tint_mix"],
         nodes["hue_sat"],
         nodes["bg"],
+        ground_mix_node=nodes["ground_mix"],
+        group_node=nodes.get("group"),
+        fake_ground=fake_ground,
     )
     _refresh_hdri_blur_images(settings, nodes["env"], nodes["env_blur"], nodes["env_projected"])
 
-    img = nodes["env"].image
-    _apply_world_ground_projection(scene.world, settings, enabled=bool(settings.fake_ground and img is not None))
+    _apply_world_ground_projection(scene.world, settings, enabled=fake_ground)
 
 
 def _refresh_hdri_blur_images(settings, env_node, env_blur_node, env_projected_node=None):
@@ -1210,6 +1499,9 @@ def _apply_hdri_image_path(context, settings, image_path: str) -> tuple[bool, st
             tint_mix_node,
             hue_sat_node,
             bg_node,
+            ground_mix_node=nodes["ground_mix"],
+            group_node=nodes.get("group"),
+            fake_ground=bool(settings.fake_ground and img is not None),
         )
 
         if settings.add_preview_sphere:
@@ -1584,8 +1876,8 @@ class HDRI_API_Preferences(AddonPreferences):
 
     api_base_url: StringProperty(
         name="API Base URL",
-        description="HDRI API root (no trailing slash), e.g. http://127.0.0.1:8000 — must match where uvicorn runs",
-        default="http://127.0.0.1:8000",
+        description="HDRI API root (no trailing slash), e.g. https://api.richardandrys.com",
+        default="https://api.richardandrys.com",
     )
     register_email: StringProperty(
         name="Email",
@@ -1611,9 +1903,9 @@ class HDRI_API_Preferences(AddonPreferences):
     )
     timeout_s: FloatProperty(
         name="Timeout (seconds)",
-        default=60.0,
-        min=5.0,
-        max=600.0,
+        default=600.0,
+        min=600.0,
+        max=1000.0,
     )
     use_custom_ground_projection: BoolProperty(
         name="Use custom ground projection",
