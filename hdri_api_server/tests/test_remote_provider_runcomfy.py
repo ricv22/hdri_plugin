@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import unittest
 from unittest.mock import patch
+
+from PIL import Image
 
 from remote_provider import RemoteProvider
 
@@ -467,6 +471,31 @@ class RemoteProviderRunComfyMappingTests(unittest.TestCase):
             )
         self.assertIn("11", out)
         self.assertNotIn("99", out)
+
+
+class RemoteProviderInputMaxEdgeTests(unittest.TestCase):
+    @staticmethod
+    def _rgb_b64(width: int, height: int) -> str:
+        img = Image.new("RGB", (width, height), color=(128, 64, 32))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def test_default_max_edge_1536_keeps_smaller_image(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RUNCOMFY_INPUT_MAX_EDGE", None)
+            out = Image.open(io.BytesIO(RemoteProvider._normalise_image_bytes(self._rgb_b64(800, 450))))
+        self.assertEqual(out.size, (800, 450))
+
+    def test_max_edge_100_downscales(self) -> None:
+        with patch.dict(os.environ, {"RUNCOMFY_INPUT_MAX_EDGE": "100"}, clear=False):
+            out = Image.open(io.BytesIO(RemoteProvider._normalise_image_bytes(self._rgb_b64(800, 450))))
+        self.assertEqual(out.size, (100, 56))
+
+    def test_max_edge_zero_skips_resize(self) -> None:
+        with patch.dict(os.environ, {"RUNCOMFY_INPUT_MAX_EDGE": "0"}, clear=False):
+            out = Image.open(io.BytesIO(RemoteProvider._normalise_image_bytes(self._rgb_b64(800, 450))))
+        self.assertEqual(out.size, (800, 450))
 
 
 if __name__ == "__main__":

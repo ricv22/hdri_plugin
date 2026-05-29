@@ -781,12 +781,15 @@ def config():
     hdr_default = _normalize_hdr_mode(
         os.environ.get("HDR_RECONSTRUCTION_MODE_DEFAULT", "comfyui_hdr")
     )
+    max_edge = RemoteProvider._runcomfy_input_max_edge()
     return {
         "panorama_mode": _config_panorama_mode(),
         "hdr_reconstruction_default": hdr_default,
         "hdr_http_url_configured": bool(_hdr_http_url()),
         "hdr_http_url": _hdr_http_url(),
         "remote_provider": os.environ.get("HDRI_REMOTE_PROVIDER", "legacy").strip().lower(),
+        "runcomfy_input_max_edge": max_edge,
+        "runcomfy_input_full_resolution": max_edge is None,
         "registration_enabled": os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower()
         in {"1", "true", "yes", "on"},
         "billing_enabled": stripe_enabled(),

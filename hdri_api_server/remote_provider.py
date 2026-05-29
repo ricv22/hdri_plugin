@@ -283,13 +283,27 @@ class RemoteProvider:
         return deployment_id
 
     @staticmethod
+    def _runcomfy_input_max_edge() -> int | None:
+        """Longest edge cap for RunComfy input JPEGs. None = send decoded size (no thumbnail)."""
+        raw = os.environ.get("RUNCOMFY_INPUT_MAX_EDGE", "1536").strip().lower()
+        if raw in {"", "0", "none", "off", "false", "no"}:
+            return None
+        try:
+            edge = int(raw)
+        except ValueError:
+            return 1536
+        return None if edge <= 0 else edge
+
+    @staticmethod
     def _normalise_image_bytes(image_b64: str) -> bytes:
         raw = image_b64.strip()
         if raw.startswith("data:image/"):
             _, _, raw = raw.partition(",")
         image_bytes = base64.b64decode(raw, validate=False)
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        image.thumbnail((1536, 1536), resample=Image.LANCZOS)
+        max_edge = RemoteProvider._runcomfy_input_max_edge()
+        if max_edge is not None:
+            image.thumbnail((max_edge, max_edge), resample=Image.LANCZOS)
         buf = io.BytesIO()
         image.save(buf, format="JPEG", quality=85, optimize=True)
         return buf.getvalue()
