@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from erp_seam import seam_fix_erp_wrap_blur
+from erp_seam import _seam_band_px, seam_fix_erp_wrap_blur
 from job_store import JobStore
 from panorama_prompt import DEFAULT_BASE_PANORAMA_PROMPT, compose_panorama_prompt
 
@@ -41,9 +41,20 @@ class ErpSeamTests(unittest.TestCase):
         rgb[..., 2] = 0.5
 
         before = float(abs(rgb[10, 0, 0] - rgb[10, -1, 0]))
-        fixed = seam_fix_erp_wrap_blur(rgb, band_frac=0.08, blur_sigma=12.0)
+        fixed = seam_fix_erp_wrap_blur(rgb, band_frac=0.02, blur_sigma=6.0, blend_strength=0.5)
         after = float(abs(fixed[10, 0, 0] - fixed[10, -1, 0]))
         self.assertLess(after, before)
+
+    def test_seam_band_is_narrow_at_2k(self) -> None:
+        self.assertEqual(_seam_band_px(2048, 0.012), 25)
+
+    def test_center_mostly_unchanged_with_defaults(self) -> None:
+        w, h = 512, 256
+        rgb = np.zeros((h, w, 3), dtype=np.float32)
+        rgb[..., 0] = np.linspace(0.0, 1.0, w, dtype=np.float32)
+        mid = w // 2
+        fixed = seam_fix_erp_wrap_blur(rgb)
+        self.assertLess(float(abs(fixed[10, mid, 0] - rgb[10, mid, 0])), 0.02)
 
 
 class RegistrationStoreTests(unittest.TestCase):

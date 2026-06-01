@@ -3,4 +3,6 @@ uvicorn[standard]>=0.27
 pydantic>=2.0
 pillow>=10.0
 numpy>=1.24
-# Optional for Stripe checkout: pip install stripe
+# Stripe Checkout for token purchases (optional at runtime; only needed when
+# STRIPE_SECRET_KEY is set). Safe to install everywhere.
+stripe>=9.0

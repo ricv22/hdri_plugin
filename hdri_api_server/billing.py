@@ -79,26 +79,56 @@ def create_checkout_session(
         raise HTTPException(status_code=500, detail="Token package misconfigured.")
 
     stripe = _stripe()
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        line_items=[
+
+    def _flag(name: str) -> bool:
+        return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+    session_kwargs: dict[str, Any] = {
+        "mode": "payment",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "line_items": [
             {
                 "price_data": {
                     "currency": currency,
                     "product_data": {"name": f"HDRI {label}"},
+                    # When Stripe Tax is on, prices are treated as tax-inclusive by
+                    # default for EU consumers; set HDRI_STRIPE_PRICE_TAX_BEHAVIOR.
+                    "tax_behavior": os.environ.get("HDRI_STRIPE_PRICE_TAX_BEHAVIOR", "inclusive").strip()
+                    if _flag("HDRI_STRIPE_AUTOMATIC_TAX")
+                    else None,
                     "unit_amount": price_cents,
                 },
                 "quantity": 1,
             }
         ],
-        metadata={
+        "metadata": {
             "account_id": account_id,
             "package_id": package_id,
             "tokens": str(tokens),
         },
-    )
+    }
+
+    # Strip None tax_behavior so we don't send it when tax is disabled.
+    price_data = session_kwargs["line_items"][0]["price_data"]
+    if price_data.get("tax_behavior") is None:
+        price_data.pop("tax_behavior", None)
+
+    # EU VAT on digital goods: let Stripe Tax compute and collect VAT, and
+    # collect a billing address (required for correct tax rates / invoices).
+    if _flag("HDRI_STRIPE_AUTOMATIC_TAX"):
+        session_kwargs["automatic_tax"] = {"enabled": True}
+        session_kwargs["billing_address_collection"] = "required"
+
+    # Generate a proper invoice/receipt for each purchase (legal record).
+    if _flag("HDRI_STRIPE_CREATE_INVOICE"):
+        session_kwargs["invoice_creation"] = {"enabled": True}
+
+    # Optional: capture VAT/business IDs for B2B reverse-charge.
+    if _flag("HDRI_STRIPE_COLLECT_TAX_ID"):
+        session_kwargs["tax_id_collection"] = {"enabled": True}
+
+    session = stripe.checkout.Session.create(**session_kwargs)
     checkout_url = str(getattr(session, "url", "") or "")
     session_id = str(getattr(session, "id", "") or "")
     if not checkout_url or not session_id:

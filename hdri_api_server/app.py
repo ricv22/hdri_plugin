@@ -434,14 +434,28 @@ def _apply_seam_fix_if_requested(rgb_lin: np.ndarray, req: HdriRequest) -> np.nd
     if not _seam_fix_enabled(req):
         return rgb_lin
     try:
-        band_frac = float(os.environ.get("HDRI_SEAM_FIX_BAND_FRAC", "0.04"))
+        band_frac = float(os.environ.get("HDRI_SEAM_FIX_BAND_FRAC", "0.012"))
     except ValueError:
-        band_frac = 0.04
+        band_frac = 0.012
     try:
-        blur_sigma = float(os.environ.get("HDRI_SEAM_FIX_BLUR_SIGMA", "10"))
+        blur_sigma = float(os.environ.get("HDRI_SEAM_FIX_BLUR_SIGMA", "4"))
     except ValueError:
-        blur_sigma = 10.0
-    return seam_fix_erp_wrap_blur(rgb_lin, band_frac=band_frac, blur_sigma=blur_sigma)
+        blur_sigma = 4.0
+    try:
+        blend_strength = float(os.environ.get("HDRI_SEAM_FIX_BLEND_STRENGTH", "0.35"))
+    except ValueError:
+        blend_strength = 0.35
+    try:
+        mask_power = float(os.environ.get("HDRI_SEAM_FIX_MASK_POWER", "2"))
+    except ValueError:
+        mask_power = 2.0
+    return seam_fix_erp_wrap_blur(
+        rgb_lin,
+        band_frac=band_frac,
+        blur_sigma=blur_sigma,
+        blend_strength=blend_strength,
+        mask_power=mask_power,
+    )
 
 
 def _normalize_email(email: str) -> str:
