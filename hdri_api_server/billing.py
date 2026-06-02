@@ -23,6 +23,35 @@ def register_free_tokens() -> int:
         return 10
 
 
+def token_unit_price_cents() -> int:
+    """Price per token for custom-amount purchases."""
+    try:
+        return max(1, int(os.environ.get("HDRI_TOKEN_UNIT_PRICE_CENTS", "90")))
+    except ValueError:
+        return 90
+
+
+def token_currency() -> str:
+    return (os.environ.get("HDRI_TOKEN_CURRENCY", "usd").strip().lower() or "usd")
+
+
+def custom_token_limits() -> tuple[int, int]:
+    """(min, max) tokens allowed for a single custom purchase."""
+    try:
+        lo = max(1, int(os.environ.get("HDRI_CUSTOM_TOKENS_MIN", "1")))
+    except ValueError:
+        lo = 1
+    try:
+        hi = max(lo, int(os.environ.get("HDRI_CUSTOM_TOKENS_MAX", "1000")))
+    except ValueError:
+        hi = max(lo, 1000)
+    return lo, hi
+
+
+def custom_tokens_enabled() -> bool:
+    return os.environ.get("HDRI_CUSTOM_TOKENS_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def token_packages() -> list[dict[str, Any]]:
     raw = os.environ.get("HDRI_TOKEN_PACKAGES_JSON", "").strip()
     if not raw:
@@ -66,17 +95,41 @@ def _stripe():
 def create_checkout_session(
     *,
     account_id: str,
-    package_id: str,
+    package_id: str | None = None,
+    tokens: int | None = None,
     success_url: str,
     cancel_url: str,
 ) -> dict[str, str]:
-    pkg = package_by_id(package_id)
-    tokens = int(pkg.get("tokens", 0))
-    price_cents = int(pkg.get("price_cents", 0))
-    currency = str(pkg.get("currency", "usd")).lower()
-    label = str(pkg.get("label", f"{tokens} tokens"))
-    if tokens <= 0 or price_cents <= 0:
-        raise HTTPException(status_code=500, detail="Token package misconfigured.")
+    currency = token_currency()
+
+    if tokens is not None and (package_id is None or str(package_id).strip().lower() == "custom"):
+        if not custom_tokens_enabled():
+            raise HTTPException(status_code=400, detail="Custom token amounts are disabled.")
+        lo, hi = custom_token_limits()
+        token_count = int(tokens)
+        if token_count < lo or token_count > hi:
+            raise HTTPException(status_code=400, detail=f"Choose between {lo} and {hi} tokens.")
+        unit_price = token_unit_price_cents()
+        meta_package_id = "custom"
+        label = f"{token_count} tokens"
+        # quantity = number of tokens so Stripe shows "N x unit price".
+        line_quantity = token_count
+        line_unit_amount = unit_price
+        product_name = "HDRI token"
+    else:
+        if not package_id:
+            raise HTTPException(status_code=400, detail="Provide a package_id or a custom token amount.")
+        pkg = package_by_id(package_id)
+        token_count = int(pkg.get("tokens", 0))
+        price_cents = int(pkg.get("price_cents", 0))
+        currency = str(pkg.get("currency", currency)).lower()
+        label = str(pkg.get("label", f"{token_count} tokens"))
+        if token_count <= 0 or price_cents <= 0:
+            raise HTTPException(status_code=500, detail="Token package misconfigured.")
+        meta_package_id = str(package_id)
+        line_quantity = 1
+        line_unit_amount = price_cents
+        product_name = f"HDRI {label}"
 
     stripe = _stripe()
 
@@ -91,21 +144,21 @@ def create_checkout_session(
             {
                 "price_data": {
                     "currency": currency,
-                    "product_data": {"name": f"HDRI {label}"},
+                    "product_data": {"name": product_name},
                     # When Stripe Tax is on, prices are treated as tax-inclusive by
                     # default for EU consumers; set HDRI_STRIPE_PRICE_TAX_BEHAVIOR.
                     "tax_behavior": os.environ.get("HDRI_STRIPE_PRICE_TAX_BEHAVIOR", "inclusive").strip()
                     if _flag("HDRI_STRIPE_AUTOMATIC_TAX")
                     else None,
-                    "unit_amount": price_cents,
+                    "unit_amount": line_unit_amount,
                 },
-                "quantity": 1,
+                "quantity": line_quantity,
             }
         ],
         "metadata": {
             "account_id": account_id,
-            "package_id": package_id,
-            "tokens": str(tokens),
+            "package_id": meta_package_id,
+            "tokens": str(token_count),
         },
     }
 

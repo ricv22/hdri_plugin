@@ -57,10 +57,14 @@ from auth import (
 from billing import (
     checkout_completed_event,
     create_checkout_session,
+    custom_token_limits,
+    custom_tokens_enabled,
     package_by_id,
     register_free_tokens,
     stripe_enabled,
+    token_currency,
     token_packages,
+    token_unit_price_cents,
     verify_stripe_webhook,
 )
 from erp_seam import seam_fix_erp_wrap_blur
@@ -277,10 +281,16 @@ class TokenPackageResponse(BaseModel):
 class BillingPackagesResponse(BaseModel):
     packages: list[TokenPackageResponse]
     stripe_enabled: bool
+    custom_tokens_enabled: bool = False
+    token_unit_price_cents: int = 0
+    token_currency: str = "usd"
+    custom_tokens_min: int = 1
+    custom_tokens_max: int = 1000
 
 
 class CheckoutRequest(BaseModel):
-    package_id: str = Field(..., min_length=2, max_length=64)
+    package_id: str | None = Field(None, max_length=64)
+    tokens: int | None = Field(None, ge=1, le=100000)
     success_url: str | None = None
     cancel_url: str | None = None
 
@@ -997,19 +1007,33 @@ def list_billing_packages():
                 currency=str(pkg.get("currency", "usd")),
             )
         )
-    return BillingPackagesResponse(packages=pkgs, stripe_enabled=stripe_enabled())
+    lo, hi = custom_token_limits()
+    return BillingPackagesResponse(
+        packages=pkgs,
+        stripe_enabled=stripe_enabled(),
+        custom_tokens_enabled=custom_tokens_enabled(),
+        token_unit_price_cents=token_unit_price_cents(),
+        token_currency=token_currency(),
+        custom_tokens_min=lo,
+        custom_tokens_max=hi,
+    )
 
 
 @app.post("/v1/billing/checkout", response_model=CheckoutResponse)
 def create_billing_checkout(req: CheckoutRequest, authorization: str | None = Depends(auth_header_value)):
     account = authenticate_account(_store, authorization, required=True)
-    package_by_id(req.package_id)
+    is_custom = req.tokens is not None and (req.package_id is None or req.package_id.strip().lower() == "custom")
+    if not is_custom:
+        if not req.package_id:
+            raise HTTPException(status_code=400, detail="Provide a package_id or a custom token amount.")
+        package_by_id(req.package_id)
     base = os.environ.get("HDRI_PUBLIC_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
     success_url = (req.success_url or os.environ.get("HDRI_CHECKOUT_SUCCESS_URL", f"{base}/docs")).strip()
     cancel_url = (req.cancel_url or os.environ.get("HDRI_CHECKOUT_CANCEL_URL", f"{base}/docs")).strip()
     session = create_checkout_session(
         account_id=account["account_id"],
-        package_id=req.package_id,
+        package_id=None if is_custom else req.package_id,
+        tokens=req.tokens if is_custom else None,
         success_url=success_url,
         cancel_url=cancel_url,
     )

@@ -1898,8 +1898,15 @@ class HDRI_API_Preferences(AddonPreferences):
     )
     checkout_package_id: StringProperty(
         name="Token package",
-        description="Package id from GET /v1/billing/packages (e.g. tokens_50)",
+        description="Package id from GET /v1/billing/packages (e.g. tokens_50). Used when 'Custom amount' is 0",
         default="tokens_50",
+    )
+    checkout_custom_tokens: IntProperty(
+        name="Custom amount",
+        description="Number of tokens to buy. Set to 0 to use the package above instead",
+        default=0,
+        min=0,
+        max=100000,
     )
     timeout_s: FloatProperty(
         name="Timeout (seconds)",
@@ -1932,9 +1939,14 @@ class HDRI_API_Preferences(AddonPreferences):
         row.operator("hdri.login_account", icon="KEYINGSET")
         row.operator("hdri.register_account", icon="USER")
         layout.prop(self, "api_key")
-        layout.prop(self, "checkout_package_id")
+        buy_box = layout.box()
+        buy_box.label(text="Buy tokens", icon="FUND")
+        buy_box.prop(self, "checkout_custom_tokens")
+        row = buy_box.row()
+        row.enabled = self.checkout_custom_tokens <= 0
+        row.prop(self, "checkout_package_id")
+        buy_box.operator("hdri.buy_tokens", icon="FUND")
         layout.prop(self, "timeout_s")
-        layout.operator("hdri.buy_tokens", icon="FUND")
         box = layout.box()
         box.label(text="Ground projection template", icon="NODETREE")
         box.prop(self, "use_custom_ground_projection")
@@ -2434,11 +2446,15 @@ class HDRI_OT_buy_tokens(Operator):
             return {"CANCELLED"}
         base = prefs.api_base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {prefs.api_key.strip()}"}
-        package_id = (prefs.checkout_package_id or "tokens_50").strip()
+        custom_tokens = int(getattr(prefs, "checkout_custom_tokens", 0) or 0)
+        if custom_tokens > 0:
+            checkout_payload = {"tokens": custom_tokens}
+        else:
+            checkout_payload = {"package_id": (prefs.checkout_package_id or "tokens_50").strip()}
         try:
             resp = _http_post_json(
                 f"{base}/v1/billing/checkout",
-                {"package_id": package_id},
+                checkout_payload,
                 headers=headers,
                 timeout_s=int(prefs.timeout_s),
             )
