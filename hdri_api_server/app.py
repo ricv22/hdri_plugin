@@ -64,6 +64,7 @@ from billing import (
     stripe_enabled,
     token_currency,
     token_packages,
+    token_price_tiers,
     token_unit_price_cents,
     verify_stripe_webhook,
 )
@@ -278,6 +279,11 @@ class TokenPackageResponse(BaseModel):
     currency: str
 
 
+class TokenPriceTier(BaseModel):
+    min_tokens: int
+    unit_price_cents: int
+
+
 class BillingPackagesResponse(BaseModel):
     packages: list[TokenPackageResponse]
     stripe_enabled: bool
@@ -286,6 +292,7 @@ class BillingPackagesResponse(BaseModel):
     token_currency: str = "usd"
     custom_tokens_min: int = 1
     custom_tokens_max: int = 1000
+    token_price_tiers: list[TokenPriceTier] = []
 
 
 class CheckoutRequest(BaseModel):
@@ -1016,6 +1023,7 @@ def list_billing_packages():
         token_currency=token_currency(),
         custom_tokens_min=lo,
         custom_tokens_max=hi,
+        token_price_tiers=[TokenPriceTier(**t) for t in token_price_tiers()],
     )
 
 

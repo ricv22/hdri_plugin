@@ -3358,13 +3358,19 @@ class HDRI_PT_panel(Panel):
             box.label(text=f"Last error: {s.last_job_error[:100]}", icon="ERROR")
         if s.tokens_remaining >= 0:
             box.label(text=f"Tokens remaining: {s.tokens_remaining}", icon="SOLO_ON")
+        prefs = _addon_prefs()
         acct = box.column(align=True)
-        acct.prop(_addon_prefs(), "register_email", text="Email")
-        acct.prop(_addon_prefs(), "account_password", text="Password")
+        acct.prop(prefs, "register_email", text="Email")
+        acct.prop(prefs, "account_password", text="Password")
         row_acct = acct.row(align=True)
         row_acct.operator("hdri.login_account", icon="KEYINGSET")
         row_acct.operator("hdri.register_account", icon="USER")
-        acct.operator("hdri.buy_tokens", icon="FUND")
+        buy = box.column(align=True)
+        buy.prop(prefs, "checkout_custom_tokens", text="Tokens to buy")
+        row_buy = buy.row(align=True)
+        row_buy.enabled = prefs.checkout_custom_tokens <= 0
+        row_buy.prop(prefs, "checkout_package_id", text="Package")
+        buy.operator("hdri.buy_tokens", icon="FUND")
 
         box.label(text="Panorama options")
         box.label(text="Extra prompt is prepended before required ERP outpaint instructions.", icon="INFO")

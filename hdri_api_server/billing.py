@@ -24,11 +24,47 @@ def register_free_tokens() -> int:
 
 
 def token_unit_price_cents() -> int:
-    """Price per token for custom-amount purchases."""
+    """Base (single-token) price for custom-amount purchases."""
     try:
         return max(1, int(os.environ.get("HDRI_TOKEN_UNIT_PRICE_CENTS", "90")))
     except ValueError:
         return 90
+
+
+def token_price_tiers() -> list[dict[str, int]]:
+    """
+    Volume pricing for custom token amounts: buying more lowers the per-token price.
+    Returns tiers sorted by min_tokens ascending, each {min_tokens, unit_price_cents}.
+    Override with HDRI_TOKEN_PRICE_TIERS_JSON=[[1,90],[50,78],[150,66]].
+    """
+    raw = os.environ.get("HDRI_TOKEN_PRICE_TIERS_JSON", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            tiers = sorted(
+                ({"min_tokens": max(1, int(a)), "unit_price_cents": max(1, int(b))} for a, b in parsed),
+                key=lambda t: t["min_tokens"],
+            )
+            if tiers:
+                return tiers
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    base = token_unit_price_cents()
+    return [
+        {"min_tokens": 1, "unit_price_cents": base},
+        {"min_tokens": 50, "unit_price_cents": max(1, round(base * 0.87))},
+        {"min_tokens": 150, "unit_price_cents": max(1, round(base * 0.73))},
+    ]
+
+
+def token_unit_price_cents_for(count: int) -> int:
+    """Per-token price for a given quantity, applying volume tiers."""
+    qty = int(count)
+    price = token_unit_price_cents()
+    for tier in token_price_tiers():
+        if qty >= int(tier["min_tokens"]):
+            price = int(tier["unit_price_cents"])
+    return max(1, price)
 
 
 def token_currency() -> str:
@@ -109,7 +145,7 @@ def create_checkout_session(
         token_count = int(tokens)
         if token_count < lo or token_count > hi:
             raise HTTPException(status_code=400, detail=f"Choose between {lo} and {hi} tokens.")
-        unit_price = token_unit_price_cents()
+        unit_price = token_unit_price_cents_for(token_count)
         meta_package_id = "custom"
         label = f"{token_count} tokens"
         # quantity = number of tokens so Stripe shows "N x unit price".
