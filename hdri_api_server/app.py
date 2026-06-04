@@ -72,6 +72,12 @@ from erp_seam import seam_fix_erp_wrap_blur
 from job_store import JobStore
 from panorama import get_mode, hdr_http_json
 from panorama_prompt import compose_panorama_prompt
+from registration_guard import (
+    assert_can_register_email,
+    client_ip_from_request,
+    free_tokens_for_new_registration,
+    hash_client_ip,
+)
 from remote_provider import RemoteProvider
 from rgbe_hdr import read_rgbe_hdr_bytes, write_rgbe_hdr
 
@@ -954,7 +960,7 @@ def get_account(authorization: str | None = Depends(auth_header_value)):
 
 
 @app.post("/v1/register", response_model=RegisterResponse)
-def register_account(req: RegisterRequest):
+def register_account(req: RegisterRequest, request: Request):
     if os.environ.get("HDRI_REGISTRATION_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
         raise HTTPException(status_code=503, detail="Self-service registration is disabled.")
     email = _validate_email(req.email)
@@ -963,13 +969,28 @@ def register_account(req: RegisterRequest):
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
+    email_canonical = assert_can_register_email(email, _store)
+    ip_hash = hash_client_ip(client_ip_from_request(request))
+    default_free = register_free_tokens()
+    free_tokens = free_tokens_for_new_registration(_store, ip_hash, default_free)
+
     account_id = _email_to_account_id(email)
     if _store.get_account(account_id):
         account_id = f"{account_id}-{uuid.uuid4().hex[:6]}"
 
-    free_tokens = register_free_tokens()
-    _store.ensure_account(account_id, initial_tokens=free_tokens, email=email)
+    _store.ensure_account(
+        account_id,
+        initial_tokens=free_tokens,
+        email=email,
+        email_canonical=email_canonical,
+    )
     _store.set_password_hash(account_id, hash_password(password))
+    _store.record_registration(
+        account_id=account_id,
+        ip_hash=ip_hash,
+        email_canonical=email_canonical,
+        free_tokens_granted=free_tokens,
+    )
     return _auth_response_for_account(account_id, email)
 
 

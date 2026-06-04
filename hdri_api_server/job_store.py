@@ -90,6 +90,26 @@ class JobStore:
             )
             self._ensure_column(conn, "accounts", "email", "TEXT")
             self._ensure_column(conn, "accounts", "password_hash", "TEXT")
+            self._ensure_column(conn, "accounts", "email_canonical", "TEXT")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS registration_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    ip_hash TEXT NOT NULL,
+                    email_canonical TEXT NOT NULL,
+                    free_tokens_granted INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_registration_events_ip
+                ON registration_events(ip_hash, created_at)
+                """
+            )
+            self._backfill_email_canonical(conn)
             conn.commit()
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
@@ -98,22 +118,102 @@ class JobStore:
         if column not in names:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
 
-    def ensure_account(self, account_id: str, *, initial_tokens: int = 0, email: str | None = None) -> None:
+    def _backfill_email_canonical(self, conn: sqlite3.Connection) -> None:
+        try:
+            from registration_guard import canonicalize_email
+        except ImportError:
+            from .registration_guard import canonicalize_email  # type: ignore
+        rows = conn.execute(
+            "SELECT account_id, email FROM accounts WHERE email IS NOT NULL AND (email_canonical IS NULL OR email_canonical = '')"
+        ).fetchall()
+        for row in rows:
+            email = str(row["email"] or "").strip()
+            if not email:
+                continue
+            conn.execute(
+                "UPDATE accounts SET email_canonical = ? WHERE account_id = ?",
+                (canonicalize_email(email), str(row["account_id"])),
+            )
+        conn.commit()
+
+    def ensure_account(
+        self,
+        account_id: str,
+        *,
+        initial_tokens: int = 0,
+        email: str | None = None,
+        email_canonical: str | None = None,
+    ) -> None:
         now = int(time.time())
         email_norm = (email or "").strip().lower() or None
+        canon = (email_canonical or "").strip().lower() or None
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO accounts(account_id, tokens_remaining, created_at, email)
-                VALUES (?, ?, ?, ?)
+                INSERT OR IGNORE INTO accounts(account_id, tokens_remaining, created_at, email, email_canonical)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (account_id, int(initial_tokens), now, email_norm),
+                (account_id, int(initial_tokens), now, email_norm, canon),
             )
             if email_norm:
                 conn.execute(
                     "UPDATE accounts SET email = COALESCE(email, ?) WHERE account_id = ?",
                     (email_norm, account_id),
                 )
+            if canon:
+                conn.execute(
+                    "UPDATE accounts SET email_canonical = COALESCE(email_canonical, ?) WHERE account_id = ?",
+                    (canon, account_id),
+                )
+            conn.commit()
+
+    def get_account_by_canonical_email(self, email_canonical: str) -> dict[str, Any] | None:
+        canon = (email_canonical or "").strip().lower()
+        if not canon:
+            return None
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT account_id, tokens_remaining, email FROM accounts WHERE email_canonical = ?",
+                (canon,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "account_id": str(row["account_id"]),
+            "tokens_remaining": int(row["tokens_remaining"]),
+            "email": row["email"],
+        }
+
+    def count_registrations_by_ip(self, ip_hash: str, *, since_ts: int) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM registration_events
+                WHERE ip_hash = ? AND created_at >= ?
+                """,
+                (ip_hash, int(since_ts)),
+            ).fetchone()
+        return int(row["n"] if row else 0)
+
+    def record_registration(
+        self,
+        *,
+        account_id: str,
+        ip_hash: str,
+        email_canonical: str,
+        free_tokens_granted: int,
+    ) -> None:
+        now = int(time.time())
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO registration_events(
+                    account_id, ip_hash, email_canonical, free_tokens_granted, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (account_id, ip_hash, email_canonical, int(free_tokens_granted), now),
+            )
             conn.commit()
 
     def ensure_api_key(self, api_key_hash: str, account_id: str) -> None:

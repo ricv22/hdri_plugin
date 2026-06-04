@@ -1928,7 +1928,6 @@ class HDRI_API_Preferences(AddonPreferences):
         default="",
         subtype="FILE_PATH",
     )
-
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "api_base_url")
@@ -3207,8 +3206,68 @@ class HDRI_OT_cancel_job(Operator):
         return {"FINISHED"}
 
 
+def _hdri_job_active(settings) -> bool:
+    return (settings.current_job_status or "").strip().lower() in {"queued", "running"}
+
+
+def _hdri_draw_job_status(box, settings) -> None:
+    active_job = _hdri_job_active(settings)
+    if settings.current_job_id:
+        box.label(text=f"Job: {settings.current_job_id[:12]}…", icon="TIME")
+    if active_job:
+        prefs_eta = _addon_prefs()
+        t0 = float(getattr(settings, "job_started_monotonic", -1.0))
+        if t0 >= 0.0:
+            elapsed = float(time.monotonic()) - t0
+            expected = float(_expected_remote_job_seconds(settings))
+            remaining = max(0.0, expected - elapsed)
+            budget = max(1.0, float(prefs_eta.timeout_s))
+            learns = ""
+            if float(getattr(settings, "last_completed_job_wall_s", 0.0) or 0.0) >= 15.0:
+                learns = " (from last job)"
+            elif expected > 0.0:
+                learns = " (typical)"
+            box.label(
+                text=(
+                    f"{_format_duration_compact(elapsed)} elapsed · "
+                    f"~{_format_duration_compact(remaining)} left · "
+                    f"timeout {_format_duration_compact(budget)}{learns}"
+                ),
+                icon="TIME",
+            )
+        status_now = (settings.current_job_status or "").strip().lower()
+        if status_now == "running":
+            box.label(text=f"Status: running  {_running_ascii_spinner()}", icon="INFO")
+        elif status_now == "queued":
+            box.label(text="Status: queued", icon="INFO")
+    elif settings.current_job_status:
+        box.label(text=f"Status: {settings.current_job_status}", icon="INFO")
+    if settings.last_job_error:
+        box.label(text=f"Error: {settings.last_job_error[:80]}", icon="ERROR")
+
+
+def _hdri_draw_account(layout, settings) -> None:
+    prefs = _addon_prefs()
+    box = layout.box()
+    box.label(text="Account", icon="USER")
+    acct = box.column(align=True)
+    acct.prop(prefs, "register_email", text="Email")
+    acct.prop(prefs, "account_password", text="Password")
+    row_acct = acct.row(align=True)
+    row_acct.operator("hdri.login_account", text="Log in", icon="KEYINGSET")
+    row_acct.operator("hdri.register_account", text="Register", icon="USER")
+    if settings.tokens_remaining >= 0:
+        acct.label(text=f"Tokens: {settings.tokens_remaining}", icon="SOLO_ON")
+    buy = acct.column(align=True)
+    buy.prop(prefs, "checkout_custom_tokens", text="Tokens to buy")
+    row_buy = buy.row(align=True)
+    row_buy.enabled = prefs.checkout_custom_tokens <= 0
+    row_buy.prop(prefs, "checkout_package_id", text="Package")
+    buy.operator("hdri.buy_tokens", text="Buy tokens", icon="FUND")
+
+
 class HDRI_PT_panel(Panel):
-    bl_label = "Photo → HDRI (API)"
+    bl_label = "Photo → HDRI"
     bl_idname = "HDRI_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -3217,10 +3276,41 @@ class HDRI_PT_panel(Panel):
     def draw(self, context):
         layout = self.layout
         s = context.scene.hdri_api_settings
+        active_job = _hdri_job_active(s)
+
+        _hdri_draw_account(layout, s)
+
+        if active_job or s.last_job_error:
+            status_box = layout.box()
+            status_box.label(text="Job", icon="TIME")
+            _hdri_draw_job_status(status_box, s)
+
+        row = layout.row(align=True)
+        row.scale_y = 1.3
+        row.enabled = not active_job
+        row.operator(HDRI_OT_apply_from_api.bl_idname, text="Generate HDRI", icon="WORLD")
+        if active_job:
+            layout.operator(HDRI_OT_cancel_job.bl_idname, text="Cancel job", icon="CANCEL")
+
+
+class HDRI_PT_input_image(Panel):
+    bl_label = "Input Image"
+    bl_idname = "HDRI_PT_input_image"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "HDRI"
+    bl_parent_id = "HDRI_PT_panel"
+
+    def draw(self, context):
+        s = context.scene.hdri_api_settings
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
 
         col = layout.column(align=True)
         col.prop(s, "input_image_path")
-        col.label(text="Placement")
+        col.separator()
+        col.label(text="Placement on panorama")
         col.prop(s, "placement_coverage")
         row_place = col.row(align=True)
         row_place.prop(s, "placement_yaw_deg")
@@ -3229,47 +3319,81 @@ class HDRI_PT_panel(Panel):
         col.prop(s, "placement_hfov_deg")
         row_editor = col.row(align=True)
         row_editor.operator(HDRI_OT_open_placement_editor.bl_idname, text="Open Editor", icon="ORIENTATION_VIEW")
-        row_editor.operator(HDRI_OT_close_placement_editor.bl_idname, text="Close Editor", icon="X")
+        row_editor.operator(HDRI_OT_close_placement_editor.bl_idname, text="Close", icon="X")
         preview_img = bpy.data.images.get(_PLACEMENT_PREVIEW_IMAGE_NAME)
         if preview_img is not None:
             col.template_preview(preview_img, show_buttons=False)
-        col.separator()
-        col.prop(s, "library_folder")
+
+
+class HDRI_PT_library(Panel):
+    bl_label = "Library"
+    bl_idname = "HDRI_PT_library"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "HDRI"
+    bl_parent_id = "HDRI_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        s = context.scene.hdri_api_settings
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        layout.prop(s, "library_folder")
         library_folder = bpy.path.abspath((s.library_folder or "").strip()) if s.library_folder else ""
-        if library_folder:
-            lib_box = col.box()
-            lib_box.label(text="Library gallery (.hdr/.exr)")
-            if os.path.isdir(library_folder):
-                files = _list_hdri_files(library_folder)
-                if files:
-                    row = lib_box.row(align=True)
-                    row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Apply Latest", icon="WORLD")
-                    selected = str(getattr(s, "library_gallery_item", "") or "")
-                    apply_row = lib_box.row(align=True)
-                    apply_sel = apply_row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Apply Selected", icon="CHECKMARK")
-                    if selected and selected != "__none__":
-                        apply_sel.file_name = selected
-                    else:
-                        apply_row.enabled = False
-                    lib_box.template_icon_view(s, "library_gallery_item", show_labels=True, scale=6.0, scale_popup=4.0)
-                    if s.last_library_path:
-                        lib_box.label(text=f"Last saved: {os.path.basename(s.last_library_path)}", icon="FILE_TICK")
-                else:
-                    lib_box.label(text="No panoramas found yet.", icon="INFO")
-            else:
-                lib_box.label(text="Folder does not exist yet (will be created on save).", icon="INFO")
-        col.prop(s, "provider")
+        if not library_folder:
+            layout.label(text="Set a folder to save and browse HDRIs.", icon="INFO")
+            return
 
-        col.separator()
-        col.prop(s, "scene_mode")
-        col.prop(s, "quality_mode")
-        col.prop(s, "output_resolution")
-        col.prop(s, "preset")
+        lib_box = layout.box()
+        if not os.path.isdir(library_folder):
+            lib_box.label(text="Folder will be created on first save.", icon="INFO")
+            return
 
-        col.separator()
-        col.prop(s, "yaw_degrees")
-        col.prop(s, "pitch_degrees")
+        files = _list_hdri_files(library_folder)
+        if not files:
+            lib_box.label(text="No panoramas yet.", icon="INFO")
+            return
+
+        row = lib_box.row(align=True)
+        row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Latest", icon="WORLD")
+        selected = str(getattr(s, "library_gallery_item", "") or "")
+        apply_row = lib_box.row(align=True)
+        apply_sel = apply_row.operator(HDRI_OT_apply_library_hdri.bl_idname, text="Selected", icon="CHECKMARK")
+        if selected and selected != "__none__":
+            apply_sel.file_name = selected
+        else:
+            apply_row.enabled = False
+        lib_box.template_icon_view(s, "library_gallery_item", show_labels=True, scale=5.0, scale_popup=4.0)
+        if s.last_library_path:
+            lib_box.label(text=os.path.basename(s.last_library_path), icon="FILE_TICK")
+
+
+class HDRI_PT_transform(Panel):
+    bl_label = "Transform"
+    bl_idname = "HDRI_PT_transform"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "HDRI"
+    bl_parent_id = "HDRI_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        s = context.scene.hdri_api_settings
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        col = layout.column(align=True)
+        col.label(text="World orientation")
+        row_rot = col.row(align=True)
+        row_rot.prop(s, "yaw_degrees")
+        row_rot.prop(s, "pitch_degrees")
         col.prop(s, "roll_degrees")
+
+        col.separator()
+        col.label(text="Look")
         col.prop(s, "exposure")
         col.prop(s, "post_exposure")
         col.prop(s, "blur_amount")
@@ -3280,120 +3404,67 @@ class HDRI_PT_panel(Panel):
         col.template_color_picker(s, "tint_color", value_slider=True)
         col.prop(s, "bake_adjustments_on_server")
         col.prop(s, "add_preview_sphere")
+
+        col.separator()
+        col.label(text="Ground projection")
         col.prop(s, "fake_ground")
         fg = col.column(align=True)
         fg.enabled = s.fake_ground
         fg.prop(s, "fake_ground_z_offset")
         fg.prop(s, "fake_ground_lift")
-        gp_box = col.box()
-        gp_box.label(text="Custom ground node group", icon="NODETREE")
-        prefs = _addon_prefs()
-        if prefs.use_custom_ground_projection:
-            gp_box.label(text="Mode: saved template", icon="CHECKMARK")
-        else:
-            gp_box.label(text="Mode: built-in inline nodes", icon="INFO")
-        row = gp_box.row(align=True)
-        row.operator(HDRI_OT_save_ground_projection.bl_idname, text="Save template")
-        row.operator(HDRI_OT_reload_ground_projection.bl_idname, text="", icon="FILE_REFRESH")
-        gp_box.operator(HDRI_OT_reset_ground_projection.bl_idname, text="Use built-in nodes")
-        gp_box.label(text="1. Clean up nodes → Ctrl+G → name group", icon="BLANK1")
-        gp_box.label(text='2. "HDRI Ground Projection" + Vector/Size/Horizon/Rotation', icon="BLANK1")
-        gp_box.label(text="3. Save template → commit templates/ground_projection.blend", icon="BLANK1")
+
+
+class HDRI_PT_generation(Panel):
+    bl_label = "Generation"
+    bl_idname = "HDRI_PT_generation"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "HDRI"
+    bl_parent_id = "HDRI_PT_panel"
+
+    def draw(self, context):
+        s = context.scene.hdri_api_settings
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+
+        col = layout.column(align=True)
+        col.prop(s, "scene_mode")
+        col.prop(s, "quality_mode")
+        col.prop(s, "output_resolution")
+        col.prop(s, "preset")
 
         box = layout.box()
         row = box.row(align=True)
-        row.label(text="Panorama backend")
+        row.label(text="Server", icon="SETTINGS")
         row.operator(HDRI_OT_refresh_server_config.bl_idname, text="", icon="FILE_REFRESH")
         cfg = (s.server_config_panorama_mode or "").strip()
         last = (s.last_panorama_mode or "").strip()
         if cfg:
-            box.label(text=f"Server env: {cfg}", icon="SETTINGS")
+            box.label(text=f"Mode: {cfg}")
         else:
-            box.label(text="Server env: (click refresh)", icon="QUESTION")
+            box.label(text="Mode: (refresh)", icon="QUESTION")
         if last:
             box.label(text=f"Last job: {last}", icon="CHECKMARK")
         if cfg == "resize" or last == "resize":
-            box.label(
-                text="resize = only stretch photo to 2:1. Prompts/seed/strength are ignored.",
-                icon="ERROR",
-            )
-            box.label(
-                text="On the API host set PANORAMA_MODE=http_json and PANORAMA_HTTP_URL=…",
-                icon="INFO",
-            )
-        active_job = (s.current_job_status or "").strip().lower() in {"queued", "running"}
-        if s.current_job_id:
-            box.label(text=f"Current job: {s.current_job_id}", icon="TIME")
-        if active_job:
-            prefs_eta = _addon_prefs()
-            t0 = float(getattr(s, "job_started_monotonic", -1.0))
-            if t0 >= 0.0:
-                elapsed = float(time.monotonic()) - t0
-                expected = float(_expected_remote_job_seconds(s))
-                remaining = max(0.0, expected - elapsed)
-                budget = max(1.0, float(prefs_eta.timeout_s))
-                learns = ""
-                if float(getattr(s, "last_completed_job_wall_s", 0.0) or 0.0) >= 15.0:
-                    learns = " (from last job)"
-                elif expected > 0.0:
-                    learns = " (typical heuristic)"
-                box.label(
-                    text=(
-                        f"Elapsed {_format_duration_compact(elapsed)}  ·  est. left ~{_format_duration_compact(remaining)}"
-                        f"  ·  timeout {_format_duration_compact(budget)}{learns}"
-                    ),
-                    icon="TIME",
-                )
-            status_now = (s.current_job_status or "").strip().lower()
-            if status_now == "running":
-                box.label(text=f"Job status: 🟢 running", icon="INFO")
-                box.label(text=f"  {_running_ascii_spinner()} generating", icon="BLANK1")
-            elif status_now == "queued":
-                box.label(text=f"Job status: 🔵 queued", icon="INFO")
-            else:
-                box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
-        elif s.current_job_status:
-            box.label(text=f"Job status: {s.current_job_status}", icon="INFO")
-        if s.last_job_error:
-            box.label(text=f"Last error: {s.last_job_error[:100]}", icon="ERROR")
-        if s.tokens_remaining >= 0:
-            box.label(text=f"Tokens remaining: {s.tokens_remaining}", icon="SOLO_ON")
-        prefs = _addon_prefs()
-        acct = box.column(align=True)
-        acct.prop(prefs, "register_email", text="Email")
-        acct.prop(prefs, "account_password", text="Password")
-        row_acct = acct.row(align=True)
-        row_acct.operator("hdri.login_account", icon="KEYINGSET")
-        row_acct.operator("hdri.register_account", icon="USER")
-        buy = box.column(align=True)
-        buy.prop(prefs, "checkout_custom_tokens", text="Tokens to buy")
-        row_buy = buy.row(align=True)
-        row_buy.enabled = prefs.checkout_custom_tokens <= 0
-        row_buy.prop(prefs, "checkout_package_id", text="Package")
-        buy.operator("hdri.buy_tokens", icon="FUND")
+            box.label(text="resize = stretch only; set PANORAMA_MODE=http_json", icon="ERROR")
 
-        box.label(text="Panorama options")
-        box.label(text="Extra prompt is prepended before required ERP outpaint instructions.", icon="INFO")
-        col2 = box.column(align=True)
-        col2.prop(s, "panorama_prompt")
-        row = col2.row(align=True)
+        pano = layout.box()
+        pano.label(text="Panorama", icon="RENDER_STILL")
+        pano.label(text="Extra prompt prepends ERP outpaint instructions.", icon="INFO")
+        pcol = pano.column(align=True)
+        pcol.prop(s, "panorama_prompt")
+        row = pcol.row(align=True)
         row.prop(s, "panorama_seed")
         row.prop(s, "panorama_strength")
-        col2.prop(s, "erp_layout_mode")
-        col2.prop(s, "seam_fix")
-        row2 = col2.row(align=True)
+        pcol.prop(s, "erp_layout_mode")
+        pcol.prop(s, "seam_fix")
+        row2 = pcol.row(align=True)
         row2.prop(s, "erp_canvas_width")
         row2.prop(s, "erp_canvas_height")
-        col2.prop(s, "panorama_extra_json")
-        col2.prop(s, "hdr_reconstruction_mode")
-        col2.prop(s, "hdr_exposure_bias")
-
-        col.separator()
-        row = col.row(align=True)
-        row.enabled = not active_job
-        row.operator(HDRI_OT_apply_from_api.bl_idname, icon="WORLD")
-        if active_job:
-            col.operator(HDRI_OT_cancel_job.bl_idname, icon="CANCEL")
+        pcol.prop(s, "panorama_extra_json")
+        pcol.prop(s, "hdr_reconstruction_mode")
+        pcol.prop(s, "hdr_exposure_bias")
 
 
 classes = (
@@ -3412,6 +3483,10 @@ classes = (
     HDRI_OT_apply_library_hdri,
     HDRI_OT_cancel_job,
     HDRI_PT_panel,
+    HDRI_PT_input_image,
+    HDRI_PT_library,
+    HDRI_PT_transform,
+    HDRI_PT_generation,
 )
 
 
