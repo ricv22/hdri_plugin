@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Richard Andrys — 3D / VFX / Motion</title>
+  <meta name="description" content="Richard Andrys je 3D artist — animace, matchmove a VFX.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260619-4">
+</head>
+<body>
+  <div class="bg-overlay" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#top" data-cursor>RA<span>*</span></a>
+    <p class="status"><span class="dot"></span> <span data-i18n="status">Volný pro projekty</span></p>
+    <nav>
+      <a href="#work" data-cursor data-i18n="nav.work">Práce</a>
+      <a href="#art" data-cursor data-i18n="nav.art">Art</a>
+      <a href="#about" data-cursor data-i18n="nav.about">O mně</a>
+      <a href="#contact" data-cursor data-i18n="nav.contact">Kontakt</a>
+      <span class="lang">
+        <button type="button" data-lang="cs" data-cursor>CZ</button>
+        <button type="button" data-lang="en" data-cursor>EN</button>
+      </span>
+    </nav>
+  </header>
+
+  <main id="top" class="hero-block">
+    <section class="hero">
+      <div class="hero-text">
+        <span class="kicker reveal" data-i18n="hero.kicker">3D artist — animace · matchmove · VFX</span>
+        <h1 class="hero-title reveal" data-i18n="hero.title">
+          Tvořím <span class="fill">3D vizuály</span><br>
+          pro obraz, značky a <span class="outline">příběhy</span>.
+        </h1>
+        <p class="hero-copy reveal" data-i18n="hero.copy">
+          Animace, matchmove, produktové vizualizace a VFX.
+          Od nápadu po finální záběr.
+        </p>
+        <div class="hero-cta">
+          <a class="btn primary" href="#work" data-cursor data-i18n="cta.work">Ukázat práce</a>
+          <a class="btn ghost" href="#contact" data-cursor data-i18n="cta.start">Napsat mi</a>
+        </div>
+      </div>
+
+      <figure class="showreel reveal" data-cursor="play">
+        <div class="showreel__frame">
+          <video class="showreel__video" autoplay muted loop playsinline preload="auto">
+            <source src="./assets/web_reel_2026_006_vertical.mp4" type="video/mp4">
+          </video>
+        </div>
+        <figcaption class="showreel__tag" data-i18n="hero.reel">moving frames :)</figcaption>
+      </figure>
+    </section>
+
+    <section class="marquee" aria-label="services">
+      <div class="marquee-track">
+        <span data-i18n="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+        <span data-i18n="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+      </div>
+    </section>
+  </main>
+
+  <section id="work" class="work">
+    <div class="section-label reveal"><span>01</span> <span data-i18n="label.work">Vybrané projekty</span></div>
+
+    <div class="projects">
+      <a class="project big reveal" href="#" data-cursor="view">
+        <div class="project__media">
+          <img src="./assets/hangar_01.png" alt="Hangar climbing gym fly-through" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.animation">Animace</span>
+            <span data-i18n="tag.camera">Kamera</span>
+            <span data-i18n="tag.realtime">Realtime</span>
+          </div>
+          <h2>Hangar</h2>
+          <p data-i18n="proj.hangar">FPV průlet lezeckou stěnou. Rychlost, pohyb, chaos pod kontrolou.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view">
+        <div class="project__media">
+          <img src="./assets/edisplay_xstand.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.productviz">Produktová viz</span>
+            <span data-i18n="tag.motion">Motion</span>
+          </div>
+          <h2>eDisplay X-Stand</h2>
+          <p data-i18n="proj.edisplay">Produktové vizuály pro modulární výstavní stand.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view">
+        <div class="project__media">
+          <img src="./assets/haya_01.png" alt="Haya drink product visualisation" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.productviz">Produktová viz</span>
+            <span data-i18n="tag.lookdev">Lookdev</span>
+            <span data-i18n="tag.lighting">Svícení</span>
+          </div>
+          <h2>Haya</h2>
+          <p data-i18n="proj.haya">Produktová vizualizace nápoje — jemné vlny, hluboká modrá, lesklá plechovka.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project big reveal" href="#" data-cursor="view">
+        <div class="project__media">
+          <img src="./assets/princes_01.png" alt="Princess Lost in Time cinematic VFX shot" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.vfx">VFX</span>
+            <span data-i18n="tag.matchmove">Matchmove</span>
+            <span data-i18n="tag.comp">Kompozit</span>
+          </div>
+          <h2>Princess Lost in Time</h2>
+          <p data-i18n="proj.princess">Filmové VFX — levitující dýka, tracking a kompozit.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section id="art" class="art">
+    <div class="section-label reveal"><span>02</span> <span data-i18n="label.art">Art výběr</span></div>
+    <div class="art-grid">
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_01.png" alt="Artwork 15/2" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_02.png" alt="Artwork 18/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_03.png" alt="Artwork 19/2" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_04.png" alt="Artwork 22/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_05.png" alt="Artwork 25/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_06.jpg" alt="Artwork 27/9" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_07.png" alt="Artwork 30/10" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_08.png" alt="Artwork 30/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_09.png" alt="Artwork 30/7" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_10.png" alt="Artwork 6/1" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_11.png" alt="Artwork 8/1" loading="lazy">
+      </figure>
+    </div>
+  </section>
+
+  <section id="about" class="about">
+    <div class="section-label reveal"><span>03</span> <span data-i18n="label.about">O mně</span></div>
+    <p class="big-statement reveal" data-i18n="about.statement">
+      Jsem <mark>3D artist</mark>. Dělám animace, matchmove, produktové vizualizace
+      a VFX — od čistého renderu po <mark>finální kompozit</mark>.
+    </p>
+    <div class="tags about-tags reveal">
+      <span>Blender</span><span>After Effects</span><span>Nuke</span><span>DaVinci</span>
+      <span data-i18n="tag.houdini">Houdini (učím se)</span>
+      <span data-i18n="tag.ships">Co záběr potřebuje</span>
+    </div>
+  </section>
+
+  <section id="contact" class="contact">
+    <div class="section-label reveal"><span>04</span> <span data-i18n="label.contact">Kontakt</span></div>
+    <p class="contact-kicker reveal" data-i18n="contact.kicker">Máš v hlavě záběr? Napiš.</p>
+    <a class="contact-mail reveal" href="mailto:rich.andrys@gmail.com" data-cursor>rich.andrys@gmail.com</a>
+    <div class="socials reveal">
+      <a href="#" data-cursor>Instagram</a>
+      <a href="#" data-cursor>Vimeo</a>
+      <a href="#" data-cursor>ArtStation</a>
+      <a href="#" data-cursor>LinkedIn</a>
+    </div>
+  </section>
+
+  <footer>
+    <p>© <span id="year"></span> <span data-i18n="footer.built">Richard Andrys — 3D artist</span></p>
+    <p>richardandrys.com</p>
+  </footer>
+
+  <script src="./script.js?v=20260619-2"></script>
+</body>
+</html>
