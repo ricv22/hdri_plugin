@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260619-4">
+  <link rel="stylesheet" href="./styles.css?v=20260620-5">
 </head>
 <body>
   <div class="bg-overlay" aria-hidden="true"></div>
@@ -70,7 +70,7 @@
     <div class="section-label reveal"><span>01</span> <span data-i18n="label.work">Vybrané projekty</span></div>
 
     <div class="projects">
-      <a class="project big reveal" href="#" data-cursor="view">
+      <a class="project big reveal" href="#" data-cursor="view" data-project="hangar">
         <div class="project__media">
           <img src="./assets/hangar_01.png" alt="Hangar climbing gym fly-through" loading="lazy">
         </div>
@@ -86,7 +86,7 @@
         </div>
       </a>
 
-      <a class="project reveal" href="#" data-cursor="view">
+      <a class="project reveal" href="#" data-cursor="view" data-project="edisplay">
         <div class="project__media">
           <img src="./assets/edisplay_xstand.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
         </div>
@@ -101,7 +101,7 @@
         </div>
       </a>
 
-      <a class="project reveal" href="#" data-cursor="view">
+      <a class="project reveal" href="#" data-cursor="view" data-project="haya">
         <div class="project__media">
           <img src="./assets/haya_01.png" alt="Haya drink product visualisation" loading="lazy">
         </div>
@@ -117,7 +117,7 @@
         </div>
       </a>
 
-      <a class="project big reveal" href="#" data-cursor="view">
+      <a class="project big reveal" href="#" data-cursor="view" data-project="princess">
         <div class="project__media">
           <img src="./assets/princes_01.png" alt="Princess Lost in Time cinematic VFX shot" loading="lazy">
         </div>
@@ -204,6 +204,16 @@
     <p>richardandrys.com</p>
   </footer>
 
-  <script src="./script.js?v=20260619-2"></script>
+  <div id="project-modal" class="project-modal" aria-hidden="true">
+    <div class="project-modal__backdrop" data-modal-close></div>
+    <div class="project-modal__panel" role="dialog" aria-modal="true" aria-labelledby="project-modal-title">
+      <button class="project-modal__close" type="button" data-modal-close data-cursor data-i18n="modal.close">Zavřít</button>
+      <h3 id="project-modal-title" class="project-modal__title"></h3>
+      <p id="project-modal-copy" class="project-modal__copy"></p>
+      <div id="project-modal-grid" class="project-modal__grid"></div>
+    </div>
+  </div>
+
+  <script src="./script.js?v=20260620-3"></script>
 </body>
 </html>
