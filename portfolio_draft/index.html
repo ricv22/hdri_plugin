@@ -8,12 +8,28 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260620-5">
+  <link rel="stylesheet" href="./styles.css?v=20260622-3">
 </head>
 <body>
   <div class="bg-overlay" aria-hidden="true"></div>
   <div class="grain" aria-hidden="true"></div>
   <div class="cursor" aria-hidden="true"></div>
+  <div id="audience-gate" class="audience-gate" aria-hidden="true">
+    <div class="audience-gate__panel">
+      <p class="audience-gate__eyebrow">richardandrys.com</p>
+      <h2 data-i18n="gate.title">Who are you?</h2>
+      <div class="audience-gate__choices">
+        <button type="button" class="audience-choice" data-audience="brand" data-cursor>
+          <strong data-i18n="gate.brand.label">I'm a brand / company</strong>
+          <span data-i18n="gate.brand.copy">I need visuals that make products feel premium and memorable.</span>
+        </button>
+        <button type="button" class="audience-choice" data-audience="agency" data-cursor>
+          <strong data-i18n="gate.agency.label">I'm an agency / studio</strong>
+          <span data-i18n="gate.agency.copy">I need a 3D partner for campaigns, post and demanding shots.</span>
+        </button>
+      </div>
+    </div>
+  </div>
 
   <header class="topbar">
     <a class="brand" href="#top" data-cursor>RA<span>*</span></a>
@@ -27,18 +43,22 @@
         <button type="button" data-lang="cs" data-cursor>CZ</button>
         <button type="button" data-lang="en" data-cursor>EN</button>
       </span>
+      <span class="audience-switch">
+        <button type="button" data-audience-toggle="brand" data-cursor data-i18n="audience.brand">For brands</button>
+        <button type="button" data-audience-toggle="agency" data-cursor data-i18n="audience.agency">For agencies</button>
+      </span>
     </nav>
   </header>
 
   <main id="top" class="hero-block">
     <section class="hero">
       <div class="hero-text">
-        <span class="kicker reveal" data-i18n="hero.kicker">3D artist — animace · matchmove · VFX</span>
-        <h1 class="hero-title reveal" data-i18n="hero.title">
+        <span class="kicker reveal" data-i18n="hero.kicker" data-persona-field="hero.kicker">3D artist — animace · matchmove · VFX</span>
+        <h1 class="hero-title reveal" data-i18n="hero.title" data-persona-field="hero.title">
           Tvořím <span class="fill">3D vizuály</span><br>
           pro obraz, značky a <span class="outline">příběhy</span>.
         </h1>
-        <p class="hero-copy reveal" data-i18n="hero.copy">
+        <p class="hero-copy reveal" data-i18n="hero.copy" data-persona-field="hero.copy">
           Animace, matchmove, produktové vizualizace a VFX.
           Od nápadu po finální záběr.
         </p>
@@ -60,8 +80,8 @@
 
     <section class="marquee" aria-label="services">
       <div class="marquee-track">
-        <span data-i18n="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
-        <span data-i18n="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+        <span data-i18n="usecases.line" data-persona-field="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+        <span data-i18n="usecases.line" data-persona-field="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
       </div>
     </section>
   </main>
@@ -214,6 +234,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20260620-3"></script>
+  <script src="./script.js?v=20260622-3"></script>
 </body>
 </html>

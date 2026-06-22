@@ -45,6 +45,13 @@ const translations = {
     "contact.kicker": "Máš v hlavě záběr? Napiš.",
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Zavřít",
+    "gate.title": "Kdo jsi?",
+    "gate.brand.label": "Jsem značka / firma",
+    "gate.brand.copy": "Hledám vizuály, díky kterým budou produkty působit prémiově a zapamatovatelně.",
+    "gate.agency.label": "Jsem agentura / studio",
+    "gate.agency.copy": "Hledám 3D parťáka do kampaní, postprodukce a náročnějších shotů.",
+    "audience.brand": "Pro značky",
+    "audience.agency": "Pro agentury",
   },
   en: {
     "status": "Available for projects",
@@ -88,11 +95,86 @@ const translations = {
     "contact.kicker": "Have a shot in mind? Write me.",
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Close",
+    "gate.title": "Who are you?",
+    "gate.brand.label": "I'm a brand / company",
+    "gate.brand.copy": "I need visuals that make products feel premium and memorable.",
+    "gate.agency.label": "I'm an agency / studio",
+    "gate.agency.copy": "I need a 3D partner for campaigns, post and demanding shots.",
+    "audience.brand": "For brands",
+    "audience.agency": "For agencies",
   },
 };
 
 let currentLang = "cs";
 let activeProjectId = null;
+let currentAudience = "agency";
+
+const personaCopy = {
+  brand: {
+    cs: {
+      "hero.kicker": "3D artist — fotorealistické produktové vizuály",
+      "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>',
+      "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
+      "usecases.line": "PRODUKTOVÉ SPOTY — PACKSHOT ANIMACE — CGI PRO KAMPANĚ — 3D PRO E-SHOPY — BRAND LAUNCH VIZUÁLY — RETAIL VIZUÁLY — VYSVĚTLUJÍCÍ ANIMACE — VFX DOPLŇKY — SOCIAL AD VIZUÁLY —",
+    },
+    en: {
+      "hero.kicker": "3D artist — photoreal product visuals",
+      "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>',
+      "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
+      "usecases.line": "PRODUCT SPOTS — PACKSHOT ANIMATION — CAMPAIGN CGI — 3D FOR ECOMMERCE — BRAND LAUNCH VISUALS — RETAIL VISUALS — EXPLAINER ANIMATION — VFX ENHANCEMENTS — SOCIAL AD VISUALS —",
+    },
+  },
+  agency: {
+    cs: {
+      "hero.kicker": "3D artist — animace · matchmove · VFX",
+      "hero.title": 'I create <span class="fill">3D visuals</span> for videos, brands and stories.',
+      "hero.copy": "Animation, matchmove, compositing, product visuals and VFX — helping take ideas from concept to final shot.",
+    },
+    en: {
+      "hero.kicker": "3D artist — animation · matchmove · VFX",
+      "hero.title": 'I create <span class="fill">3D visuals</span> for videos, brands and stories.',
+      "hero.copy": "Animation, matchmove, compositing, product visuals and VFX — helping take ideas from concept to final shot.",
+    },
+  },
+};
+
+const personaTargets = {
+  "hero.kicker": document.querySelector('[data-persona-field="hero.kicker"]'),
+  "hero.title": document.querySelector('[data-persona-field="hero.title"]'),
+  "hero.copy": document.querySelector('[data-persona-field="hero.copy"]'),
+  "usecases.line": document.querySelectorAll('[data-persona-field="usecases.line"]'),
+};
+const audienceGate = document.getElementById("audience-gate");
+const audienceGateChoices = document.querySelectorAll("[data-audience]");
+const audienceToggleButtons = document.querySelectorAll("[data-audience-toggle]");
+
+function applyAudienceCopy() {
+  const audienceDict = (personaCopy[currentAudience] && personaCopy[currentAudience][currentLang]) || {};
+  const defaultDict = translations[currentLang] || translations.cs;
+  Object.entries(personaTargets).forEach(([key, target]) => {
+    const value = audienceDict[key] || defaultDict[key];
+    if (!value || !target) return;
+    if (target instanceof NodeList) {
+      target.forEach((node) => {
+        node.innerHTML = value;
+      });
+      return;
+    }
+    target.innerHTML = value;
+  });
+}
+
+function setAudience(audience, persist = true) {
+  currentAudience = audience === "brand" ? "brand" : "agency";
+  document.body.dataset.audience = currentAudience;
+  audienceToggleButtons.forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-audience-toggle") === currentAudience);
+  });
+  if (persist) {
+    try { localStorage.setItem("audience", currentAudience); } catch (e) {}
+  }
+  applyAudienceCopy();
+}
 
 function setLang(lang) {
   const dict = translations[lang] || translations.cs;
@@ -105,6 +187,7 @@ function setLang(lang) {
   document.querySelectorAll("[data-lang]").forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-lang") === lang);
   });
+  applyAudienceCopy();
   if (activeProjectId) renderProjectModal(activeProjectId);
   try { localStorage.setItem("lang", lang); } catch (e) {}
 }
@@ -112,11 +195,36 @@ function setLang(lang) {
 const savedLang = (() => {
   try { return localStorage.getItem("lang"); } catch (e) { return null; }
 })();
+const savedAudience = (() => {
+  try { return localStorage.getItem("audience"); } catch (e) { return null; }
+})();
+const urlAudience = new URLSearchParams(window.location.search).get("audience");
+const initialAudience = urlAudience === "brand" || urlAudience === "agency"
+  ? urlAudience
+  : (savedAudience === "brand" || savedAudience === "agency" ? savedAudience : "agency");
+
 setLang(savedLang === "en" ? "en" : "cs");
+setAudience(initialAudience, false);
 
 document.querySelectorAll("[data-lang]").forEach((btn) => {
   btn.addEventListener("click", () => setLang(btn.getAttribute("data-lang")));
 });
+audienceGateChoices.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setAudience(btn.getAttribute("data-audience"));
+    if (audienceGate) audienceGate.classList.add("hidden");
+  });
+});
+audienceToggleButtons.forEach((btn) => {
+  btn.addEventListener("click", () => setAudience(btn.getAttribute("data-audience-toggle")));
+});
+if (audienceGate) {
+  if (urlAudience === "brand" || urlAudience === "agency" || savedAudience === "brand" || savedAudience === "agency") {
+    audienceGate.classList.add("hidden");
+  } else {
+    audienceGate.classList.remove("hidden");
+  }
+}
 
 // ---------- custom cursor ----------
 const cursor = document.querySelector(".cursor");
