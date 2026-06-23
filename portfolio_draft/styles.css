@@ -153,9 +153,22 @@ html, body {
   font-family: inherit;
 }
 .audience-choice strong {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-bottom: 0.45rem;
   font-size: 1.02rem;
+}
+.audience-choice__icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  color: var(--acid);
+  flex: 0 0 auto;
+}
+.audience-choice__icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .audience-choice span {
   color: var(--muted);

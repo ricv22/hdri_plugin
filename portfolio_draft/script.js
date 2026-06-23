@@ -113,13 +113,13 @@ const personaCopy = {
   brand: {
     cs: {
       "hero.kicker": "3D artist — fotorealistické produktové vizuály",
-      "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>',
-      "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
+      "hero.title": 'Vizuály, které dávají <span class="fill">produktům</span> <span class="outline">charakter</span>.',
+      "hero.copy": "Tvořím čisté a zapamatovatelné vizuální výstupy pro značky, kampaně i produkty – od nápadu až po finální záběr.",
       "usecases.line": "PRODUKTOVÉ SPOTY — PACKSHOT ANIMACE — CGI PRO KAMPANĚ — 3D PRO E-SHOPY — BRAND LAUNCH VIZUÁLY — RETAIL VIZUÁLY — VYSVĚTLUJÍCÍ ANIMACE — VFX DOPLŇKY — SOCIAL AD VIZUÁLY —",
     },
     en: {
       "hero.kicker": "3D artist — photoreal product visuals",
-      "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>',
+      "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>.',
       "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
       "usecases.line": "PRODUCT SPOTS — PACKSHOT ANIMATION — CAMPAIGN CGI — 3D FOR ECOMMERCE — BRAND LAUNCH VISUALS — RETAIL VISUALS — EXPLAINER ANIMATION — VFX ENHANCEMENTS — SOCIAL AD VISUALS —",
     },
@@ -127,8 +127,8 @@ const personaCopy = {
   agency: {
     cs: {
       "hero.kicker": "3D artist — animace · matchmove · VFX",
-      "hero.title": 'I create <span class="fill">3D visuals</span> for videos, brands and stories.',
-      "hero.copy": "Animation, matchmove, compositing, product visuals and VFX — helping take ideas from concept to final shot.",
+      "hero.title": 'Tvořím <span class="fill">3D vizuály</span> pro značky, kampaně a audiovizuální projekty.',
+      "hero.copy": "Animace, matchmove, compositing, produktové vizualizace a VFX – pomáhám proměnit nápady ve finální záběry.",
     },
     en: {
       "hero.kicker": "3D artist — animation · matchmove · VFX",
