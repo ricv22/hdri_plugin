@@ -45,11 +45,11 @@ const translations = {
     "contact.kicker": "Máš v hlavě záběr? Napiš.",
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Zavřít",
-    "gate.title": "Kdo jsi?",
-    "gate.brand.label": "Jsem značka / firma",
-    "gate.brand.copy": "Hledám vizuály, díky kterým budou produkty působit prémiově a zapamatovatelně.",
-    "gate.agency.label": "Jsem agentura / studio",
-    "gate.agency.copy": "Hledám 3D parťáka do kampaní, postprodukce a náročnějších shotů.",
+    "gate.title": "Kdo jste?",
+    "gate.brand.label": "Jsme značka / firma",
+    "gate.brand.copy": "Hledáme vizuály, díky kterým budou naše produkty atraktivní a nepřehlédnutelné.",
+    "gate.agency.label": "Jsme agentura / studio",
+    "gate.agency.copy": "Hledáme 3D parťáka do kampaní, postprodukce a náročnějších shotů.",
     "audience.brand": "Pro značky",
     "audience.agency": "Pro agentury",
   },
@@ -96,10 +96,10 @@ const translations = {
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Close",
     "gate.title": "Who are you?",
-    "gate.brand.label": "I'm a brand / company",
-    "gate.brand.copy": "I need visuals that make products feel premium and memorable.",
-    "gate.agency.label": "I'm an agency / studio",
-    "gate.agency.copy": "I need a 3D partner for campaigns, post and demanding shots.",
+    "gate.brand.label": "We're a brand / company",
+    "gate.brand.copy": "We need visuals that make our products attractive and impossible to miss.",
+    "gate.agency.label": "We're an agency / studio",
+    "gate.agency.copy": "We need a 3D partner for campaigns, post and demanding shots.",
     "audience.brand": "For brands",
     "audience.agency": "For agencies",
   },
@@ -195,6 +195,19 @@ function setLang(lang) {
 const savedLang = (() => {
   try { return localStorage.getItem("lang"); } catch (e) { return null; }
 })();
+
+function detectBrowserLang() {
+  const langs = navigator.languages?.length
+    ? navigator.languages
+    : [navigator.language || "cs"];
+  for (const lang of langs) {
+    const code = String(lang).toLowerCase().split("-")[0];
+    if (code === "cs" || code === "en") return code;
+  }
+  return "cs";
+}
+
+const initialLang = savedLang === "en" || savedLang === "cs" ? savedLang : detectBrowserLang();
 const savedAudience = (() => {
   try { return localStorage.getItem("audience"); } catch (e) { return null; }
 })();
@@ -203,7 +216,7 @@ const initialAudience = urlAudience === "brand" || urlAudience === "agency"
   ? urlAudience
   : (savedAudience === "brand" || savedAudience === "agency" ? savedAudience : "agency");
 
-setLang(savedLang === "en" ? "en" : "cs");
+setLang(initialLang);
 setAudience(initialAudience, false);
 
 document.querySelectorAll("[data-lang]").forEach((btn) => {
@@ -266,12 +279,12 @@ const projectDetails = {
   hangar: {
     title: "Hangar",
     copyKey: "detail.hangar.copy",
-    images: ["hangar_01.png", "hangar_02.png", "hangar_registrace_01.png", "hangar_registrace_02.png"],
+    images: ["hangar_01.png", "hangar_02.png", "hangar_03.png", "hangar_04.png"],
   },
   edisplay: {
     title: "eDisplay X-Stand",
     copyKey: "detail.edisplay.copy",
-    images: ["edisplay_xstand.png"],
+    images: ["edisplay_xstand_01.png", "edisplay_xstand_02.png", "edisplay_xstand_03.png"],
   },
   haya: {
     title: "Haya",

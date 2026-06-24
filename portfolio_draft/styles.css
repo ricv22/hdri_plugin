@@ -120,59 +120,61 @@ html, body {
   display: none;
 }
 .audience-gate__panel {
-  width: min(920px, 100%);
+  width: min(980px, 100%);
   border: 1px solid var(--line);
   background: #09090d;
-  padding: 1.2rem;
+  padding: 1.6rem;
 }
 .audience-gate__eyebrow {
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.5rem;
   color: var(--muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
+}
+.audience-gate__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
 }
 .audience-gate h2 {
   margin: 0;
   font-family: "Archivo Black", sans-serif;
-  font-size: clamp(1.4rem, 3vw, 2.1rem);
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
   letter-spacing: -0.02em;
+  flex: 1;
+}
+.lang--gate {
+  flex-shrink: 0;
+  margin-top: 0.2rem;
 }
 .audience-gate__choices {
-  margin-top: 1rem;
+  margin-top: 1.4rem;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.8rem;
+  gap: 1rem;
 }
 .audience-choice {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.01);
   color: var(--ink);
   text-align: left;
-  padding: 1rem;
+  padding: 1.25rem;
   font-family: inherit;
 }
 .audience-choice strong {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.45rem;
-  font-size: 1.02rem;
-}
-.audience-choice__icon {
-  width: 1.15rem;
-  height: 1.15rem;
-  color: var(--acid);
-  flex: 0 0 auto;
-}
-.audience-choice__icon svg {
-  width: 100%;
-  height: 100%;
   display: block;
+  margin-bottom: 0.65rem;
+  font-family: "Archivo Black", sans-serif;
+  font-size: clamp(1.15rem, 2.2vw, 1.55rem);
+  color: var(--acid);
+  letter-spacing: -0.02em;
 }
 .audience-choice span {
   color: var(--muted);
-  line-height: 1.45;
+  font-size: clamp(0.95rem, 1.6vw, 1.12rem);
+  line-height: 1.5;
 }
 .audience-choice:hover {
   border-color: var(--acid);

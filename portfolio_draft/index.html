@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260622-3">
+  <link rel="stylesheet" href="./styles.css?v=20260622-7">
 </head>
 <body>
   <div class="bg-overlay" aria-hidden="true"></div>
@@ -17,31 +17,21 @@
   <div id="audience-gate" class="audience-gate" aria-hidden="true">
     <div class="audience-gate__panel">
       <p class="audience-gate__eyebrow">richardandrys.com</p>
-      <h2 data-i18n="gate.title">Who are you?</h2>
+      <div class="audience-gate__head">
+        <h2 data-i18n="gate.title">Who are you?</h2>
+        <span class="lang lang--gate">
+          <button type="button" data-lang="cs" data-cursor>CZ</button>
+          <button type="button" data-lang="en" data-cursor>EN</button>
+        </span>
+      </div>
       <div class="audience-gate__choices">
         <button type="button" class="audience-choice" data-audience="brand" data-cursor>
-          <strong>
-            <span class="audience-choice__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" role="img" focusable="false">
-                <path d="M5 8.5 12 4l7 4.5v7L12 20l-7-4.5v-7Z" fill="none" stroke="currentColor" stroke-width="1.8"/>
-                <path d="M12 4v16M5 8.5l7 4.5 7-4.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
-              </svg>
-            </span>
-            <span data-i18n="gate.brand.label">I'm a brand / company</span>
-          </strong>
-          <span data-i18n="gate.brand.copy">I need visuals that make products feel premium and memorable.</span>
+          <strong data-i18n="gate.brand.label">We're a brand / company</strong>
+          <span data-i18n="gate.brand.copy">We need visuals that make our products attractive and impossible to miss.</span>
         </button>
         <button type="button" class="audience-choice" data-audience="agency" data-cursor>
-          <strong>
-            <span class="audience-choice__icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" role="img" focusable="false">
-                <path d="M6 7h12M6 12h8M6 17h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                <circle cx="18" cy="12" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/>
-              </svg>
-            </span>
-            <span data-i18n="gate.agency.label">I'm an agency / studio</span>
-          </strong>
-          <span data-i18n="gate.agency.copy">I need a 3D partner for campaigns, post and demanding shots.</span>
+          <strong data-i18n="gate.agency.label">We're an agency / studio</strong>
+          <span data-i18n="gate.agency.copy">We need a 3D partner for campaigns, post and demanding shots.</span>
         </button>
       </div>
     </div>
@@ -87,7 +77,7 @@
       <figure class="showreel reveal" data-cursor="play">
         <div class="showreel__frame">
           <video class="showreel__video" autoplay muted loop playsinline preload="auto">
-            <source src="./assets/web_reel_2026_007_vertical.mp4" type="video/mp4">
+            <source src="./assets/web_reel_2026_009_vertical.mp4" type="video/mp4">
           </video>
         </div>
         <figcaption class="showreel__tag" data-i18n="hero.reel">moving frames :)</figcaption>
@@ -124,7 +114,7 @@
 
       <a class="project reveal" href="#" data-cursor="view" data-project="edisplay">
         <div class="project__media">
-          <img src="./assets/edisplay_xstand.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
+          <img src="./assets/edisplay_xstand_01.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
         </div>
         <div class="project__info">
           <div class="tags">
@@ -250,6 +240,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20260622-4"></script>
+  <script src="./script.js?v=20260622-8"></script>
 </body>
 </html>
