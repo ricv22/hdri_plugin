@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Richard Andrys — 3D / VFX / Motion</title>
+  <meta name="description" content="Richard Andrys je 3D artist — animace, matchmove a VFX.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260625-12">
+</head>
+<body>
+  <div class="bg-overlay" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor" aria-hidden="true"></div>
+  <div id="audience-gate" class="audience-gate" aria-hidden="true">
+    <div class="audience-gate__panel">
+      <p class="audience-gate__eyebrow">richardandrys.com</p>
+      <div class="audience-gate__head">
+        <h2 data-i18n="gate.title">Who are you?</h2>
+        <span class="lang lang--gate">
+          <button type="button" data-lang="cs">CZ</button>
+          <button type="button" data-lang="en">EN</button>
+        </span>
+      </div>
+      <div class="audience-gate__choices">
+        <button type="button" class="audience-choice" data-audience="brand">
+          <strong data-i18n="gate.brand.label">We're a brand / company</strong>
+          <span data-i18n="gate.brand.copy">We need visuals that make our products attractive and impossible to miss.</span>
+        </button>
+        <button type="button" class="audience-choice" data-audience="agency">
+          <strong data-i18n="gate.agency.label">We're an agency / studio</strong>
+          <span data-i18n="gate.agency.copy">We need a 3D partner for campaigns, post and demanding shots.</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <a class="brand" href="#top" data-cursor>RA<span>*</span></a>
+    <p class="status"><span class="dot"></span> <span data-i18n="status">Volný pro projekty</span></p>
+    <nav>
+      <div class="nav-menu" id="nav-menu">
+        <a href="#services" data-cursor data-i18n="nav.services">Služby</a>
+        <a href="#work" data-cursor data-i18n="nav.work">Práce</a>
+        <a href="#art" data-cursor data-i18n="nav.art">Art</a>
+        <a href="#about" data-cursor data-i18n="nav.about">O mně</a>
+        <a href="#contact" data-cursor data-i18n="nav.contact">Kontakt</a>
+        <span class="audience-switch">
+          <button type="button" data-audience-toggle="brand" data-cursor>
+            <span class="audience-switch__long" data-i18n="audience.brand">For brands</span>
+            <span class="audience-switch__short" data-i18n="audience.brand.short">Brands</span>
+          </button>
+          <button type="button" data-audience-toggle="agency" data-cursor>
+            <span class="audience-switch__long" data-i18n="audience.agency">For agencies</span>
+            <span class="audience-switch__short" data-i18n="audience.agency.short">Agencies</span>
+          </button>
+        </span>
+      </div>
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav-menu" data-cursor>
+        <span></span><span></span><span></span>
+      </button>
+      <span class="lang">
+        <button type="button" data-lang="cs" data-cursor>CZ</button>
+        <button type="button" data-lang="en" data-cursor>EN</button>
+      </span>
+    </nav>
+  </header>
+
+  <main id="top" class="hero-block">
+    <section class="hero">
+      <div class="hero-text">
+        <span class="kicker reveal" data-i18n="hero.kicker" data-persona-field="hero.kicker">3D artist — animace · matchmove · VFX</span>
+        <h1 class="hero-title reveal" data-i18n="hero.title" data-persona-field="hero.title">
+          Tvořím <span class="fill">3D vizuály</span><br>
+          pro obraz, značky a <span class="outline">příběhy</span>.
+        </h1>
+        <p class="hero-copy reveal" data-i18n="hero.copy" data-persona-field="hero.copy">
+          Animace, matchmove, produktové vizualizace a VFX.
+          Od nápadu po finální záběr.
+        </p>
+        <div class="hero-cta">
+          <a class="btn primary" href="#work" data-cursor data-i18n="cta.work">Ukázat práce</a>
+          <a class="btn ghost" href="#contact" data-cursor data-i18n="cta.start">Napsat mi</a>
+        </div>
+      </div>
+
+      <figure class="showreel reveal" data-cursor="play">
+        <div class="showreel__frame">
+          <video class="showreel__video" autoplay muted loop playsinline preload="metadata">
+            <source src="./assets/web_reel_2026_009_vertical.mp4" type="video/mp4">
+          </video>
+        </div>
+        <figcaption class="showreel__tag" data-i18n="hero.reel">moving frames :)</figcaption>
+      </figure>
+    </section>
+
+    <section class="marquee" aria-label="services">
+      <div class="marquee-track">
+        <span data-i18n="usecases.line" data-persona-field="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+        <span data-i18n="usecases.line" data-persona-field="usecases.line">ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —</span>
+      </div>
+    </section>
+  </main>
+
+  <section id="services" class="services">
+    <div class="section-label reveal"><span>01</span> <span data-i18n="label.services">Co pro vás umím vytvořit</span></div>
+    <div class="services-grid">
+      <article class="service-card reveal" data-persona-show="brand">
+        <h3 data-i18n="service.product.title">Produktový visual sprint</h3>
+        <p data-i18n="service.product.copy">Hero render + 3–5 formátů pro e-shop, social ads a launch — bez velké produkce.</p>
+      </article>
+      <article class="service-card reveal" data-persona-show="brand">
+        <h3 data-i18n="service.launch.title">Launch pack</h3>
+        <p data-i18n="service.launch.copy">Key visual, krátký motion loop a varianty pro kampaň kolem nového produktu.</p>
+      </article>
+      <article class="service-card reveal" data-persona-show="brand">
+        <h3 data-i18n="service.industrial.title">Průmyslový explainer</h3>
+        <p data-i18n="service.industrial.copy">3D animace produktu nebo procesu z CAD, výkresů nebo fotek — pro web, obchod a veletrh.</p>
+      </article>
+      <article class="service-card reveal" data-persona-show="agency">
+        <h3 data-i18n="service.agency.title">Agency 3D / VFX support</h3>
+        <p data-i18n="service.agency.copy">Matchmove, compositing, cleanup, 3D elementy a produktové shoty do kampaní a postu.</p>
+      </article>
+      <article class="service-card reveal" data-persona-show="agency">
+        <h3 data-i18n="service.shots.title">Shot finishing</h3>
+        <p data-i18n="service.shots.copy">Tracking, keying, integrace CG a grading pro náročnější záběry v reklamě a brand filmech.</p>
+      </article>
+      <article class="service-card reveal" data-persona-show="agency">
+        <h3 data-i18n="service.product.title">Produktové vizuály</h3>
+        <p data-i18n="service.product.copy">Hero render + 3–5 formátů pro e-shop, social ads a launch — bez velké produkce.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="work" class="work">
+    <div class="section-label reveal"><span>02</span> <span data-i18n="label.work">Vybrané projekty</span></div>
+
+    <div class="projects">
+      <a class="project big reveal" href="#" data-cursor="view" data-project="hangar">
+        <div class="project__media">
+          <img src="./assets/hangar_01.png" alt="Hangar climbing gym fly-through" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.animation">Animace</span>
+            <span data-i18n="tag.camera">Kamera</span>
+            <span data-i18n="tag.realtime">Realtime</span>
+          </div>
+          <h2>Hangar</h2>
+          <p data-i18n="proj.hangar">FPV průlet lezeckou stěnou. Rychlost, pohyb, chaos pod kontrolou.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view" data-project="edisplay">
+        <div class="project__media">
+          <img src="./assets/edisplay_xstand_03.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.productviz">Produktová viz</span>
+            <span data-i18n="tag.motion">Motion</span>
+          </div>
+          <h2>eDisplay X-Stand</h2>
+          <p data-i18n="proj.edisplay">Produktové vizuály pro modulární výstavní stand.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view" data-project="haya">
+        <div class="project__media">
+          <img src="./assets/haya_01.png" alt="Haya drink product visualisation" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.productviz">Produktová viz</span>
+            <span data-i18n="tag.lookdev">Lookdev</span>
+            <span data-i18n="tag.lighting">Svícení</span>
+          </div>
+          <h2>Haya</h2>
+          <p data-i18n="proj.haya">Produktová vizualizace nápoje — jemné vlny, hluboká modrá, lesklá plechovka.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view" data-project="rusalka">
+        <div class="project__media">
+          <img src="./assets/rusalka_2.jpg" alt="Rusalka theatre visuals" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.theatre">Divadlo</span>
+            <span data-i18n="tag.animation">Animace</span>
+            <span data-i18n="tag.motion">Motion</span>
+          </div>
+          <h2>Rusalka</h2>
+          <p data-i18n="proj.rusalka">Divadelní vizuály pro inscenaci Rusalka — atmosféra, světlo a pohyb na jevišti.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project big reveal" href="#" data-cursor="view" data-project="princess">
+        <div class="project__media">
+          <img src="./assets/princes_01.png" alt="Princess Lost in Time cinematic VFX shot" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.vfx">VFX</span>
+            <span data-i18n="tag.matchmove">Matchmove</span>
+            <span data-i18n="tag.comp">Kompozit</span>
+          </div>
+          <h2>Princess Lost in Time</h2>
+          <p data-i18n="proj.princess">Filmové VFX — levitující dýka, tracking a kompozit.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section id="art" class="art">
+    <div class="section-label reveal"><span>03</span> <span data-i18n="label.art">Art výběr</span></div>
+    <div class="art-grid">
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_01.png" alt="Artwork 15/2" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_02.png" alt="Artwork 18/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_03.png" alt="Artwork 19/2" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_04.png" alt="Artwork 22/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_05.png" alt="Artwork 25/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_06.jpg" alt="Artwork 27/9" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_07.png" alt="Artwork 30/10" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_08.png" alt="Artwork 30/1" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_09.png" alt="Artwork 30/7" loading="lazy">
+      </figure>
+      <figure class="art-item reveal" data-cursor="view">
+        <img src="./assets/art_10.png" alt="Artwork 6/1" loading="lazy">
+      </figure>
+      <figure class="art-item wide reveal" data-cursor="view">
+        <img src="./assets/art_11.png" alt="Artwork 8/1" loading="lazy">
+      </figure>
+    </div>
+  </section>
+
+  <section id="about" class="about">
+    <div class="section-label reveal"><span>04</span> <span data-i18n="label.about">O mně</span></div>
+    <p class="big-statement reveal" data-i18n="about.statement">
+      Jsem <mark>3D artist</mark>. Dělám produktové vizuály, animace a VFX pro značky, agentury a kampaně — aby produkt vypadal co nejlépe, <mark>snímek po snímku</mark>.
+    </p>
+    <div class="tags about-tags reveal">
+      <span>Blender</span><span>After Effects</span><span>Nuke</span><span>DaVinci</span>
+      <span>Photoshop</span><span>Python</span>
+      <span data-i18n="tag.ships">Co záběr potřebuje</span>
+    </div>
+  </section>
+
+  <section id="contact" class="contact">
+    <div class="section-label reveal"><span>05</span> <span data-i18n="label.contact">Kontakt</span></div>
+    <p class="contact-kicker reveal" data-i18n="contact.kicker">Máš v hlavě záběr? Napiš.</p>
+    <a class="contact-mail reveal" href="mailto:rich.andrys@gmail.com" data-cursor>rich.andrys@gmail.com</a>
+    <div class="socials reveal">
+      <a href="#" data-cursor>Instagram</a>
+      <a href="#" data-cursor>Vimeo</a>
+      <a href="#" data-cursor>ArtStation</a>
+      <a href="#" data-cursor>LinkedIn</a>
+    </div>
+  </section>
+
+  <footer>
+    <p>© <span id="year"></span> <span data-i18n="footer.built">Richard Andrys — 3D artist</span></p>
+    <p>richardandrys.com</p>
+  </footer>
+
+  <div id="project-modal" class="project-modal" aria-hidden="true">
+    <div class="project-modal__backdrop" data-modal-close></div>
+    <div class="project-modal__panel" role="dialog" aria-modal="true" aria-labelledby="project-modal-title">
+      <button class="project-modal__close" type="button" data-modal-close data-cursor data-i18n="modal.close">Zavřít</button>
+      <h3 id="project-modal-title" class="project-modal__title"></h3>
+      <p id="project-modal-copy" class="project-modal__copy"></p>
+      <div id="project-modal-grid" class="project-modal__grid"></div>
+    </div>
+  </div>
+
+  <script src="./script.js?v=20260625-12"></script>
+</body>
+</html>
