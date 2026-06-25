@@ -1,6 +1,13 @@
 const yearEl = document.getElementById("year");
 if (yearEl) yearEl.textContent = String(new Date().getFullYear());
 
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const isLowPowerDevice =
+  (typeof navigator.hardwareConcurrency === "number" && navigator.hardwareConcurrency <= 4) ||
+  (typeof navigator.deviceMemory === "number" && navigator.deviceMemory <= 4);
+const useLiteMode = prefersReducedMotion || isLowPowerDevice;
+if (useLiteMode) document.body.classList.add("lite-mode");
+
 // ---------- i18n (Czech default) ----------
 const translations = {
   cs: {
@@ -31,17 +38,19 @@ const translations = {
     "tag.vfx": "VFX",
     "tag.matchmove": "Matchmove",
     "tag.comp": "Kompozit",
-    "tag.houdini": "Houdini (učím se)",
+    "tag.theatre": "Divadlo",
     "tag.ships": "Co záběr potřebuje",
     "proj.hangar": "FPV průlet lezeckou stěnou. Rychlost, pohyb, chaos pod kontrolou.",
     "proj.edisplay": "Produktové vizuály pro modulární výstavní stand.",
     "proj.haya": "Produktová vizualizace nápoje — jemné vlny, hluboká modrá, lesklá plechovka.",
     "proj.princess": "Filmové VFX — levitující dýka, tracking a kompozit.",
+    "proj.rusalka": "Divadelní vizuály pro inscenaci Rusalka — atmosféra, světlo a pohyb na jevišti.",
     "detail.hangar.copy": "FPV průlet a kamerová choreografie pro sportovní prostor s důrazem na tempo a orientaci v prostoru.",
     "detail.edisplay.copy": "Produktová vizualizace modulárního standu. Klíčové bylo čisté nasvícení, čitelnost konstrukce a výrazná branding atmosféra.",
     "detail.haya.copy": "Produktová série nápoje Haya. Kombinace měkkého světla, materiality plechovky a barevné nálady pro premium feel.",
     "detail.princess.copy": "Cinematic VFX sekvence: tracking, digitální objekt, kompozit a grading pro konzistentní filmový look.",
-    "about.statement": 'Jsem <mark>3D artist</mark>. Dělám animace, matchmove, produktové vizualizace a VFX — od čistého renderu po <mark>finální kompozit</mark>.',
+    "detail.rusalka.copy": "Vizuální práce pro divadelní produkci Rusalka. Projekce, animace a světelná atmosféra pro podporu stage designu a dramaturgie.",
+    "about.statement": 'Jsem <mark>3D artist</mark>. Tvořím animace, produktové vizuály a VFX — aby produkty vypadaly co nejlépe, <mark>snímek po snímku</mark>.',
     "contact.kicker": "Máš v hlavě záběr? Napiš.",
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Zavřít",
@@ -52,6 +61,8 @@ const translations = {
     "gate.agency.copy": "Hledáme 3D parťáka do kampaní, postprodukce a náročnějších shotů.",
     "audience.brand": "Pro značky",
     "audience.agency": "Pro agentury",
+    "audience.brand.short": "Značky",
+    "audience.agency.short": "Agentury",
   },
   en: {
     "status": "Available for projects",
@@ -81,17 +92,19 @@ const translations = {
     "tag.vfx": "VFX",
     "tag.matchmove": "Matchmove",
     "tag.comp": "Comp",
-    "tag.houdini": "Houdini-curious",
+    "tag.theatre": "Theatre",
     "tag.ships": "Whatever the shot needs",
     "proj.hangar": "FPV fly-through inside a climbing gym. Speed, movement, controlled chaos.",
     "proj.edisplay": "Product visuals for a modular exhibition stand.",
     "proj.haya": "Product visualization for a drink — soft waves, deep blue, glossy can.",
     "proj.princess": "Cinematic VFX — levitating dagger, tracking and compositing.",
+    "proj.rusalka": "Theatre visuals for Rusalka — atmosphere, light and motion on stage.",
     "detail.hangar.copy": "FPV fly-through and camera choreography for a sport environment, focused on pace and spatial clarity.",
     "detail.edisplay.copy": "Product visualization for a modular stand. Priority was clean lighting, structure readability and strong branded atmosphere.",
     "detail.haya.copy": "Product series for Haya drink. Blend of soft lighting, can material detail and color mood for a premium feel.",
     "detail.princess.copy": "Cinematic VFX sequence: tracking, digital object integration, compositing and grading for a cohesive film look.",
-    "about.statement": "I'm a <mark>3D artist</mark>. I create animation, matchmove, product visuals and VFX — from clean render to <mark>final composite</mark>.",
+    "detail.rusalka.copy": "Visual work for the Rusalka theatre production. Projection, animation and lighting atmosphere supporting stage design and dramaturgy.",
+    "about.statement": 'I\'m a <mark>3D artist</mark>. I create animation, product visuals and VFX — making products look their best, <mark>one frame at a time</mark>.',
     "contact.kicker": "Have a shot in mind? Write me.",
     "footer.built": "Richard Andrys — 3D artist",
     "modal.close": "Close",
@@ -102,6 +115,8 @@ const translations = {
     "gate.agency.copy": "We need a 3D partner for campaigns, post and demanding shots.",
     "audience.brand": "For brands",
     "audience.agency": "For agencies",
+    "audience.brand.short": "Brands",
+    "audience.agency.short": "Agencies",
   },
 };
 
@@ -115,13 +130,13 @@ const personaCopy = {
       "hero.kicker": "3D artist — fotorealistické produktové vizuály",
       "hero.title": 'Vizuály, které dávají <span class="fill">produktům</span> <span class="outline">charakter</span>.',
       "hero.copy": "Tvořím čisté a zapamatovatelné vizuální výstupy pro značky, kampaně i produkty – od nápadu až po finální záběr.",
-      "usecases.line": "PRODUKTOVÉ SPOTY — PACKSHOT ANIMACE — CGI PRO KAMPANĚ — 3D PRO E-SHOPY — BRAND LAUNCH VIZUÁLY — RETAIL VIZUÁLY — VYSVĚTLUJÍCÍ ANIMACE — VFX DOPLŇKY — SOCIAL AD VIZUÁLY —",
+      "usecases.line": "PRODUKTOVÉ VIZUÁLY — CGI KAMPANĚ — PACKSHOT ANIMACE — BRAND VIZUÁLY — PRODUKTOVÉ SPOTY — SOCIAL AD VIZUÁLY — KEY VISUALY — VIZUÁLY PRO LAUNCH PRODUKTŮ — 3D PRO E-SHOPY — MOTION DESIGN — VFX PRO REKLAMU — RETAIL KAMPANĚ — EXPLAINER ANIMACE — PRODUKTOVÉ RENDERY — CGI OBSAH — DIGITÁLNÍ PRODUKCE —",
     },
     en: {
       "hero.kicker": "3D artist — photoreal product visuals",
       "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>.',
       "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
-      "usecases.line": "PRODUCT SPOTS — PACKSHOT ANIMATION — CAMPAIGN CGI — 3D FOR ECOMMERCE — BRAND LAUNCH VISUALS — RETAIL VISUALS — EXPLAINER ANIMATION — VFX ENHANCEMENTS — SOCIAL AD VISUALS —",
+      "usecases.line": "PRODUCT VISUALS — PACKSHOT ANIMATION — CGI CAMPAIGNS — PRODUCT RENDERS — BRAND LAUNCH VISUALS — SOCIAL AD CREATIVES — E-COMMERCE VISUALS — MOTION DESIGN — KEY VISUALS — EXPLAINER ANIMATION — RETAIL VISUALS — VFX FOR COMMERCIALS — CGI PRODUCTS — DIGITAL CAMPAIGN ASSETS —",
     },
   },
   agency: {
@@ -129,11 +144,13 @@ const personaCopy = {
       "hero.kicker": "3D artist — animace · matchmove · VFX",
       "hero.title": 'Tvořím <span class="fill">3D vizuály</span> pro značky, kampaně a audiovizuální projekty.',
       "hero.copy": "Animace, matchmove, compositing, produktové vizualizace a VFX – pomáhám proměnit nápady ve finální záběry.",
+      "usecases.line": "MATCHMOVE — CAMERA TRACKING — OBJECT TRACKING — ROTOSCOPING — KOMPOZIT — CLEANUP & PAINT — VFX INTEGRACE — CG INTEGRACE — MOTION TRACKING — KEYING — COLOR GRADING — STŘIH — ONLINE FINISHING — DOKONČENÍ SHOTŮ — PŘÍPRAVA PLATE — POSTPRODUKČNÍ PODPORA —",
     },
     en: {
       "hero.kicker": "3D artist — animation · matchmove · VFX",
       "hero.title": 'I create <span class="fill">3D visuals</span> for videos, brands and stories.',
       "hero.copy": "Animation, matchmove, compositing, product visuals and VFX — helping take ideas from concept to final shot.",
+      "usecases.line": "MATCHMOVE — CAMERA TRACKING — OBJECT TRACKING — ROTOSCOPING — COMPOSITING — CLEANUP & PAINT — VFX INTEGRATION — CG INTEGRATION — MOTION TRACKING — KEYING — COLOR GRADING — EDITING — ONLINE FINISHING — SHOT FINISHING — PLATE PREPARATION — POST-PRODUCTION SUPPORT —",
     },
   },
 };
@@ -145,8 +162,18 @@ const personaTargets = {
   "usecases.line": document.querySelectorAll('[data-persona-field="usecases.line"]'),
 };
 const audienceGate = document.getElementById("audience-gate");
-const audienceGateChoices = document.querySelectorAll("[data-audience]");
+const audienceGateChoices = document.querySelectorAll(".audience-choice[data-audience]");
 const audienceToggleButtons = document.querySelectorAll("[data-audience-toggle]");
+const topbar = document.querySelector(".topbar");
+const navToggle = document.getElementById("nav-toggle");
+const navMenuLinks = document.querySelectorAll("#nav-menu a");
+
+function setGateOpen(isOpen) {
+  if (!audienceGate) return;
+  audienceGate.classList.toggle("hidden", !isOpen);
+  audienceGate.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  document.body.classList.toggle("gate-open", isOpen);
+}
 
 function applyAudienceCopy() {
   const audienceDict = (personaCopy[currentAudience] && personaCopy[currentAudience][currentLang]) || {};
@@ -223,9 +250,11 @@ document.querySelectorAll("[data-lang]").forEach((btn) => {
   btn.addEventListener("click", () => setLang(btn.getAttribute("data-lang")));
 });
 audienceGateChoices.forEach((btn) => {
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     setAudience(btn.getAttribute("data-audience"));
-    if (audienceGate) audienceGate.classList.add("hidden");
+    setGateOpen(false);
   });
 });
 audienceToggleButtons.forEach((btn) => {
@@ -233,26 +262,53 @@ audienceToggleButtons.forEach((btn) => {
 });
 if (audienceGate) {
   if (urlAudience === "brand" || urlAudience === "agency" || savedAudience === "brand" || savedAudience === "agency") {
-    audienceGate.classList.add("hidden");
+    setGateOpen(false);
   } else {
-    audienceGate.classList.remove("hidden");
+    setGateOpen(true);
   }
+}
+
+if (topbar && navToggle) {
+  navToggle.addEventListener("click", () => {
+    const isOpen = topbar.classList.toggle("nav-open");
+    navToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  });
+  navMenuLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      topbar.classList.remove("nav-open");
+      navToggle.setAttribute("aria-expanded", "false");
+    });
+  });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 420 && topbar.classList.contains("nav-open")) {
+      topbar.classList.remove("nav-open");
+      navToggle.setAttribute("aria-expanded", "false");
+    }
+  });
 }
 
 // ---------- custom cursor ----------
 const cursor = document.querySelector(".cursor");
 const fine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
-if (cursor && fine) {
+if (cursor && fine && !useLiteMode) {
   let x = window.innerWidth / 2;
   let y = window.innerHeight / 2;
+  let rafId = null;
 
-  window.addEventListener("mousemove", (e) => {
+  const renderCursor = () => {
+    cursor.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
+    rafId = null;
+  };
+
+  const onPointerMove = (e) => {
     x = e.clientX;
     y = e.clientY;
-    cursor.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-  });
-  cursor.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+    if (rafId == null) rafId = window.requestAnimationFrame(renderCursor);
+  };
+
+  window.addEventListener("pointermove", onPointerMove, { passive: true });
+  renderCursor();
 
   document.querySelectorAll("[data-cursor]").forEach((el) => {
     const mode = el.getAttribute("data-cursor");
@@ -296,6 +352,12 @@ const projectDetails = {
     copyKey: "detail.princess.copy",
     images: ["princes_01.png", "princes_02.png", "princes_03.png"],
   },
+  rusalka: {
+    title: "Rusalka",
+    copyKey: "detail.rusalka.copy",
+    videos: ["rusalka_reel.mp4"],
+    images: ["rusalka_1.jpg", "rusalka_2.jpg", "rusalka_3.jpg"],
+  },
 };
 
 function renderProjectModal(projectId) {
@@ -305,9 +367,13 @@ function renderProjectModal(projectId) {
   const dict = translations[currentLang] || translations.cs;
   projectModalTitle.textContent = project.title;
   projectModalCopy.innerHTML = dict[project.copyKey] || "";
-  projectModalGrid.innerHTML = project.images
+  const videoHtml = (project.videos || [])
+    .map((vid) => `<video class="project-modal__video" src="./assets/${vid}" autoplay muted loop playsinline preload="auto"></video>`)
+    .join("");
+  const imageHtml = (project.images || [])
     .map((img, i) => `<img src="./assets/${img}" alt="${project.title} detail ${i + 1}" loading="lazy">`)
     .join("");
+  projectModalGrid.innerHTML = imageHtml + videoHtml;
 }
 
 function openProjectModal(projectId) {
@@ -317,6 +383,7 @@ function openProjectModal(projectId) {
   projectModal.classList.add("open");
   projectModal.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
+  projectModal.querySelectorAll("video").forEach((v) => v.play().catch(() => {}));
 }
 
 function closeProjectModal() {

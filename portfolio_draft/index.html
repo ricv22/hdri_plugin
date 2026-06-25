@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260622-7">
+  <link rel="stylesheet" href="./styles.css?v=20260625-10">
 </head>
 <body>
   <div class="bg-overlay" aria-hidden="true"></div>
@@ -20,16 +20,16 @@
       <div class="audience-gate__head">
         <h2 data-i18n="gate.title">Who are you?</h2>
         <span class="lang lang--gate">
-          <button type="button" data-lang="cs" data-cursor>CZ</button>
-          <button type="button" data-lang="en" data-cursor>EN</button>
+          <button type="button" data-lang="cs">CZ</button>
+          <button type="button" data-lang="en">EN</button>
         </span>
       </div>
       <div class="audience-gate__choices">
-        <button type="button" class="audience-choice" data-audience="brand" data-cursor>
+        <button type="button" class="audience-choice" data-audience="brand">
           <strong data-i18n="gate.brand.label">We're a brand / company</strong>
           <span data-i18n="gate.brand.copy">We need visuals that make our products attractive and impossible to miss.</span>
         </button>
-        <button type="button" class="audience-choice" data-audience="agency" data-cursor>
+        <button type="button" class="audience-choice" data-audience="agency">
           <strong data-i18n="gate.agency.label">We're an agency / studio</strong>
           <span data-i18n="gate.agency.copy">We need a 3D partner for campaigns, post and demanding shots.</span>
         </button>
@@ -41,17 +41,28 @@
     <a class="brand" href="#top" data-cursor>RA<span>*</span></a>
     <p class="status"><span class="dot"></span> <span data-i18n="status">Volný pro projekty</span></p>
     <nav>
-      <a href="#work" data-cursor data-i18n="nav.work">Práce</a>
-      <a href="#art" data-cursor data-i18n="nav.art">Art</a>
-      <a href="#about" data-cursor data-i18n="nav.about">O mně</a>
-      <a href="#contact" data-cursor data-i18n="nav.contact">Kontakt</a>
+      <div class="nav-menu" id="nav-menu">
+        <a href="#work" data-cursor data-i18n="nav.work">Práce</a>
+        <a href="#art" data-cursor data-i18n="nav.art">Art</a>
+        <a href="#about" data-cursor data-i18n="nav.about">O mně</a>
+        <a href="#contact" data-cursor data-i18n="nav.contact">Kontakt</a>
+        <span class="audience-switch">
+          <button type="button" data-audience-toggle="brand" data-cursor>
+            <span class="audience-switch__long" data-i18n="audience.brand">For brands</span>
+            <span class="audience-switch__short" data-i18n="audience.brand.short">Brands</span>
+          </button>
+          <button type="button" data-audience-toggle="agency" data-cursor>
+            <span class="audience-switch__long" data-i18n="audience.agency">For agencies</span>
+            <span class="audience-switch__short" data-i18n="audience.agency.short">Agencies</span>
+          </button>
+        </span>
+      </div>
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav-menu" data-cursor>
+        <span></span><span></span><span></span>
+      </button>
       <span class="lang">
         <button type="button" data-lang="cs" data-cursor>CZ</button>
         <button type="button" data-lang="en" data-cursor>EN</button>
-      </span>
-      <span class="audience-switch">
-        <button type="button" data-audience-toggle="brand" data-cursor data-i18n="audience.brand">For brands</button>
-        <button type="button" data-audience-toggle="agency" data-cursor data-i18n="audience.agency">For agencies</button>
       </span>
     </nav>
   </header>
@@ -76,7 +87,7 @@
 
       <figure class="showreel reveal" data-cursor="play">
         <div class="showreel__frame">
-          <video class="showreel__video" autoplay muted loop playsinline preload="auto">
+          <video class="showreel__video" autoplay muted loop playsinline preload="metadata">
             <source src="./assets/web_reel_2026_009_vertical.mp4" type="video/mp4">
           </video>
         </div>
@@ -114,7 +125,7 @@
 
       <a class="project reveal" href="#" data-cursor="view" data-project="edisplay">
         <div class="project__media">
-          <img src="./assets/edisplay_xstand_01.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
+          <img src="./assets/edisplay_xstand_03.png" alt="eDisplay X-Stand product visualisation" loading="lazy">
         </div>
         <div class="project__info">
           <div class="tags">
@@ -139,6 +150,22 @@
           </div>
           <h2>Haya</h2>
           <p data-i18n="proj.haya">Produktová vizualizace nápoje — jemné vlny, hluboká modrá, lesklá plechovka.</p>
+          <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
+        </div>
+      </a>
+
+      <a class="project reveal" href="#" data-cursor="view" data-project="rusalka">
+        <div class="project__media">
+          <img src="./assets/rusalka_2.jpg" alt="Rusalka theatre visuals" loading="lazy">
+        </div>
+        <div class="project__info">
+          <div class="tags">
+            <span data-i18n="tag.theatre">Divadlo</span>
+            <span data-i18n="tag.animation">Animace</span>
+            <span data-i18n="tag.motion">Motion</span>
+          </div>
+          <h2>Rusalka</h2>
+          <p data-i18n="proj.rusalka">Divadelní vizuály pro inscenaci Rusalka — atmosféra, světlo a pohyb na jevišti.</p>
           <span class="go" data-i18n="cta.view">Zobrazit projekt →</span>
         </div>
       </a>
@@ -203,12 +230,11 @@
   <section id="about" class="about">
     <div class="section-label reveal"><span>03</span> <span data-i18n="label.about">O mně</span></div>
     <p class="big-statement reveal" data-i18n="about.statement">
-      Jsem <mark>3D artist</mark>. Dělám animace, matchmove, produktové vizualizace
-      a VFX — od čistého renderu po <mark>finální kompozit</mark>.
+      Jsem <mark>3D artist</mark>. Tvořím animace, produktové vizuály a VFX — aby produkty vypadaly co nejlépe, <mark>snímek po snímku</mark>.
     </p>
     <div class="tags about-tags reveal">
       <span>Blender</span><span>After Effects</span><span>Nuke</span><span>DaVinci</span>
-      <span data-i18n="tag.houdini">Houdini (učím se)</span>
+      <span>Photoshop</span><span>Python</span>
       <span data-i18n="tag.ships">Co záběr potřebuje</span>
     </div>
   </section>
@@ -240,6 +266,6 @@
     </div>
   </div>
 
-  <script src="./script.js?v=20260622-8"></script>
+  <script src="./script.js?v=20260625-10"></script>
 </body>
 </html>
