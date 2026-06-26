@@ -24,18 +24,20 @@ const translations = {
     "cta.start": "Napsat mi",
     "hero.reel": "pohybující se snímky :)",
     "cta.view": "Zobrazit projekt →",
-    "label.services": "Co pro vás umím vytvořit",
+    "label.services": "Jak mohu pomoci vaší značce",
     "label.work": "Vybrané projekty",
     "label.art": "Art výběr",
     "label.about": "O mně",
     "label.contact": "Kontakt",
     "usecases.line": "ANIMACE — EXPLAINERY — VIDEO KLIPY — VFX — KOMPOZIT — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUKTOVÁ VIZ — CGI — REKLAMNÍ SPOTY — SOCIAL CONTENT — TITULKOVÉ SEKVENCE — LOOKDEV — SVÍCENÍ — SIMULACE — GRADING — RENDER — BRAND FILMY —",
-    "service.product.title": "Produktový visual sprint",
-    "service.product.copy": "Hero render + 3–5 formátů pro e-shop, social ads a launch — bez velké produkce.",
-    "service.launch.title": "Launch pack",
-    "service.launch.copy": "Key visual, krátký motion loop a varianty pro kampaň kolem nového produktu.",
-    "service.industrial.title": "Průmyslový explainer",
-    "service.industrial.copy": "3D animace produktu nebo procesu z CAD, výkresů nebo fotek — pro web, obchod a veletrh.",
+    "service.sell.title": "Prodat produkt",
+    "service.sell.copy": "Fotorealistické 3D vizuály a animace, které pomohou vašemu produktu vyniknout na e-shopu, sociálních sítích i v reklamních kampaních.",
+    "service.launch.title": "Představit novinku",
+    "service.launch.copy": "Působivé 3D animace a motion design pro uvedení nových produktů, kampaní nebo značek. Vizuály, které zaujmou během několika vteřin.",
+    "service.explain.title": "Vysvětlit složitý proces",
+    "service.explain.copy": "Srozumitelné animace technologií, výroby a pracovních postupů vytvořené z CAD dat, výkresů nebo fotografií. Přehledně a bez zbytečně složité produkce.",
+    "service.productviz.title": "Produktové vizuály",
+    "service.productviz.copy": "Hero render + 3–5 formátů pro e-shop, social ads a launch — bez velké produkce.",
     "service.agency.title": "Agency 3D / VFX support",
     "service.agency.copy": "Matchmove, compositing, cleanup, 3D elementy a produktové shoty do kampaní a postu.",
     "service.shots.title": "Shot finishing",
@@ -90,18 +92,20 @@ const translations = {
     "cta.start": "Start a project",
     "hero.reel": "moving frames :)",
     "cta.view": "View project →",
-    "label.services": "What I can create for you",
+    "label.services": "How I Can Help Your Brand",
     "label.work": "Selected projects",
     "label.art": "Art selection",
     "label.about": "About",
     "label.contact": "Contact",
     "usecases.line": "ANIMATIONS — EXPLAINERS — VIDEO CLIPS — VFX — COMPOSITING — CAMERA TRACK — MATCHMOVE — MOTION DESIGN — PRODUCT VIZ — CGI — COMMERCIALS — SOCIAL CONTENT — TITLE SEQUENCES — LOOKDEV — LIGHTING — SIMULATION — GRADING — RENDER — BRAND FILMS —",
-    "service.product.title": "Product visual sprint",
-    "service.product.copy": "Hero render + 3–5 formats for e-commerce, social ads and launch — without a large production.",
-    "service.launch.title": "Launch pack",
-    "service.launch.copy": "Key visual, short motion loop and campaign variants around a new product.",
-    "service.industrial.title": "Industrial explainer",
-    "service.industrial.copy": "3D animation of a product or process from CAD, drawings or photos — for web, sales and trade shows.",
+    "service.sell.title": "Sell Your Product",
+    "service.sell.copy": "Photorealistic 3D visuals and animations that help your product stand out across e-commerce, social media and advertising campaigns.",
+    "service.launch.title": "Launch Something New",
+    "service.launch.copy": "Engaging 3D animations and motion design for product launches, campaigns and brand stories. Visuals designed to capture attention in seconds.",
+    "service.explain.title": "Explain a Complex Process",
+    "service.explain.copy": "Clear and engaging animations created from CAD files, technical drawings or reference photos — ideal for explaining products, manufacturing and technology.",
+    "service.productviz.title": "Product visuals",
+    "service.productviz.copy": "Hero render + 3–5 formats for e-commerce, social ads and launch — without a large production.",
     "service.agency.title": "Agency 3D / VFX support",
     "service.agency.copy": "Matchmove, compositing, cleanup, 3D elements and product shots for campaigns and post.",
     "service.shots.title": "Shot finishing",
@@ -151,12 +155,14 @@ let currentAudience = "agency";
 const personaCopy = {
   brand: {
     cs: {
+      "label.services": "Jak mohu pomoci vaší značce",
       "hero.kicker": "3D artist — fotorealistické produktové vizuály",
       "hero.title": 'Vizuály, které dávají <span class="fill">produktům</span> <span class="outline">charakter</span>.',
       "hero.copy": "Tvořím čisté a zapamatovatelné vizuální výstupy pro značky, kampaně i produkty – od nápadu až po finální záběr.",
       "usecases.line": "PRODUKTOVÉ VIZUÁLY — CGI KAMPANĚ — PACKSHOT ANIMACE — BRAND VIZUÁLY — PRODUKTOVÉ SPOTY — SOCIAL AD VIZUÁLY — KEY VISUALY — VIZUÁLY PRO LAUNCH PRODUKTŮ — 3D PRO E-SHOPY — MOTION DESIGN — VFX PRO REKLAMU — RETAIL KAMPANĚ — EXPLAINER ANIMACE — PRODUKTOVÉ RENDERY — CGI OBSAH — DIGITÁLNÍ PRODUKCE —",
     },
     en: {
+      "label.services": "How I Can Help Your Brand",
       "hero.kicker": "3D artist — photoreal product visuals",
       "hero.title": 'Transform <span class="fill">products</span> into memorable <span class="outline">visual experiences</span>.',
       "hero.copy": "I help brands, campaigns and products look clean, memorable and impossible to ignore — from concept to final shot.",
@@ -165,12 +171,14 @@ const personaCopy = {
   },
   agency: {
     cs: {
+      "label.services": "Co pro vás umím vytvořit",
       "hero.kicker": "3D artist — animace · matchmove · VFX",
       "hero.title": 'Tvořím <span class="fill">3D vizuály</span> pro značky, kampaně a audiovizuální projekty.',
       "hero.copy": "Animace, matchmove, compositing, produktové vizualizace a VFX – pomáhám proměnit nápady ve finální záběry.",
       "usecases.line": "MATCHMOVE — CAMERA TRACKING — OBJECT TRACKING — ROTOSCOPING — KOMPOZIT — CLEANUP & PAINT — VFX INTEGRACE — CG INTEGRACE — MOTION TRACKING — KEYING — COLOR GRADING — STŘIH — ONLINE FINISHING — DOKONČENÍ SHOTŮ — PŘÍPRAVA PLATE — POSTPRODUKČNÍ PODPORA —",
     },
     en: {
+      "label.services": "What I can create for you",
       "hero.kicker": "3D artist — animation · matchmove · VFX",
       "hero.title": 'I create <span class="fill">3D visuals</span> for videos, brands and stories.',
       "hero.copy": "Animation, matchmove, compositing, product visuals and VFX — helping take ideas from concept to final shot.",
@@ -180,6 +188,7 @@ const personaCopy = {
 };
 
 const personaTargets = {
+  "label.services": document.querySelector('[data-persona-field="label.services"]'),
   "hero.kicker": document.querySelector('[data-persona-field="hero.kicker"]'),
   "hero.title": document.querySelector('[data-persona-field="hero.title"]'),
   "hero.copy": document.querySelector('[data-persona-field="hero.copy"]'),
@@ -325,7 +334,7 @@ if (topbar && navToggle) {
 const cursor = document.querySelector(".cursor");
 const fine = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
-if (cursor && fine && !useLiteMode) {
+if (cursor && fine) {
   let x = window.innerWidth / 2;
   let y = window.innerHeight / 2;
   let rafId = null;

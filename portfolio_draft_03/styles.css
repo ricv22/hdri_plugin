@@ -19,9 +19,9 @@ html, body {
   overflow-x: hidden;
 }
 
-/* hide native cursor on desktop, custom one takes over */
+/* hide native cursor on desktop when custom cursor is active */
 @media (hover: hover) and (pointer: fine) {
-  body:not(.gate-open) * { cursor: none; }
+  body:not(.gate-open):not(.lite-mode) * { cursor: none; }
   body.gate-open .cursor { opacity: 0; }
   body.gate-open .audience-gate,
   body.gate-open .audience-gate * {
@@ -304,7 +304,9 @@ nav a:hover { color: var(--acid); }
   padding: 0.2rem 0.55rem;
   transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
-@media (hover: hover) and (pointer: fine) { .lang button { cursor: none; } }
+@media (hover: hover) and (pointer: fine) {
+  body:not(.lite-mode) .lang button { cursor: none; }
+}
 .lang button.active {
   color: #000;
   background: var(--acid);
