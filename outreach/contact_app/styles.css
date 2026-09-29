@@ -447,7 +447,10 @@ dd a { text-decoration-color: var(--acid); }
 
 .primary:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  border-color: var(--line);
+  color: var(--muted);
+  background: #1b1b22;
+  opacity: 1;
   filter: none;
 }
 
