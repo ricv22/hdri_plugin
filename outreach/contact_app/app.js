@@ -121,7 +121,7 @@ function applyFilters() {
     return priorityMatch && (!query || haystack.includes(query));
   });
 
-  if (state.selected && !state.filtered.includes(state.selected)) {
+  if (!state.selected || !state.filtered.includes(state.selected)) {
     state.selected = state.filtered[0] || null;
   }
   renderList();
