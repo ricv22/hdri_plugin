@@ -246,6 +246,9 @@ function updateMeta() {
     : "Copy only until SMTP_USER and SMTP_PASSWORD are set";
   elements.meta.textContent = `${recipient} · ${subject} · ${sendHint}`;
   elements.sendMessage.disabled = !state.sendConfigured;
+  elements.sendMessage.title = state.sendConfigured
+    ? `Send this one email as ${state.sendFrom}`
+    : "Set SMTP_USER and SMTP_PASSWORD before sending";
 }
 
 function showCopyFeedback(button, message) {
