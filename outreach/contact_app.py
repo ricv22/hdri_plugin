@@ -20,7 +20,9 @@ from datetime import date
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import send_production_emails as mailer
 
@@ -365,14 +367,45 @@ class ContactAppHandler(BaseHTTPRequestHandler):
             super().log_message(format, *args)
 
 
+class ReusableComposerServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def health_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}/api/health"
+
+
+def existing_server_running(port: int) -> bool:
+    try:
+        with urlopen(health_url(port), timeout=1) as response:
+            return response.status == 200
+    except (URLError, OSError, TimeoutError):
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+    open_url = f"http://127.0.0.1:{args.port}"
 
-    server = ThreadingHTTPServer((args.host, args.port), ContactAppHandler)
-    print(f"Outreach composer: http://{args.host}:{args.port}")
+    if existing_server_running(args.port):
+        print(f"Composer is already running. Open {open_url}")
+        return
+
+    try:
+        server = ReusableComposerServer((args.host, args.port), ContactAppHandler)
+    except OSError as exc:
+        if existing_server_running(args.port):
+            print(f"Composer is already running. Open {open_url}")
+            return
+        print(f"Could not start the composer on port {args.port}: {exc}")
+        print("Stop the other process using that port, or run: python3 outreach/contact_app.py --port 8766")
+        raise SystemExit(1) from exc
+
+    print(f"Outreach composer: {open_url}")
     print(f"Reading contacts from: {CONTACTS}")
     print("Press Ctrl+C to stop.")
     try:

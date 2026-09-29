@@ -80,8 +80,15 @@ Run the local composer:
 python3 outreach/contact_app.py
 ```
 
-Then open `http://127.0.0.1:8765`. The app reads the latest
-`production_leads.csv` whenever the page loads. It shows the current company,
+Then open `http://127.0.0.1:8765`. If that port is already in use, the command
+prints that the composer is already running instead of crashing. To use another
+port:
+
+```bash
+python3 outreach/contact_app.py --port 8766
+```
+
+The app reads the latest `production_leads.csv` whenever the page loads. It shows the current company,
 suggests three opening lines, lets you edit the recipient, subject and full
 email, switches between Czech and English, and copies the finished message.
 
