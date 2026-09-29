@@ -1,0 +1,1499 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Outreach Composer — Richard Andrýs</title>
+  <style>
+:root {
+  --bg: #07070a;
+  --panel: #0e0e13;
+  --panel-raised: #15151c;
+  --ink: #f4f3ee;
+  --muted: #9a9aa6;
+  --line: #292932;
+  --acid: #d8ff00;
+  --acid-soft: rgba(216, 255, 0, 0.1);
+  --danger: #ff6b6b;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+* { box-sizing: border-box; }
+
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 80% 0%, rgba(216, 255, 0, 0.05), transparent 28rem),
+    var(--bg);
+}
+
+button,
+input,
+textarea { font: inherit; }
+
+button,
+a { -webkit-tap-highlight-color: transparent; }
+
+button { color: inherit; }
+
+a { color: inherit; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.topbar {
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  font-size: 1.4rem;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.brand span { color: var(--acid); }
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p { margin-top: 0; }
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(1.2rem, 2vw, 1.65rem);
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 1.25rem;
+}
+
+.mode-banner {
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(216, 255, 0, 0.35);
+  border-radius: 999px;
+  color: var(--acid);
+  background: var(--acid-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.reached-count {
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(62, 224, 160, 0.35);
+  border-radius: 999px;
+  color: #3ee0a0;
+  background: rgba(62, 224, 160, 0.1);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.session-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#session-label {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(7, 7, 10, 0.72);
+}
+
+.login-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #101018;
+}
+
+.login-copy,
+.login-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.login-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.login-card input[type="email"],
+.login-card input[type="password"] {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  outline: none;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.login-card input:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.remember {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.login-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.login-status.is-error { color: var(--danger); }
+.login-status.is-ok { color: #3ee0a0; }
+
+.safe-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.safe-mode span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acid);
+  box-shadow: 0 0 16px var(--acid);
+}
+
+main {
+  min-height: calc(100vh - 92px);
+  display: grid;
+  grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
+}
+
+.contacts-panel {
+  height: calc(100vh - 92px);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: rgba(14, 14, 19, 0.85);
+}
+
+.panel-heading,
+.message-heading,
+.preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.company-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panel-heading { padding: 22px 20px 12px; }
+
+.count,
+.priority,
+.contact-priority {
+  display: inline-grid;
+  min-width: 30px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.search { padding: 8px 14px; }
+
+.search input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  outline: none;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.search input:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 4px 14px 12px;
+}
+
+.filter,
+.language-switch button,
+.secondary,
+.primary {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  background: transparent;
+}
+
+.filter {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.filter:hover,
+.filter.is-active {
+  border-color: var(--acid);
+  color: var(--acid);
+  background: var(--acid-soft);
+}
+
+.contact-list {
+  overflow-y: auto;
+  padding: 0 8px 14px;
+}
+
+.contact-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  text-align: left;
+  background: transparent;
+}
+
+.contact-select {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 4px 0;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+}
+
+.reach-check {
+  display: grid;
+  place-items: center;
+}
+
+.reach-check input,
+.reached-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #3ee0a0;
+}
+
+.contact-row.is-reached {
+  background: rgba(62, 224, 160, 0.14);
+}
+
+.contact-row.is-reached .contact-name {
+  color: #3ee0a0;
+}
+
+.contact-row:hover { background: var(--panel-raised); }
+
+.contact-row.is-reached:hover {
+  background: rgba(62, 224, 160, 0.22);
+}
+
+.contact-row.is-active {
+  color: #111;
+  background: var(--acid);
+}
+
+.contact-row.is-active.is-reached {
+  background: #b8ff57;
+}
+
+.contact-row.is-active .contact-name {
+  color: inherit;
+}
+
+.contact-name,
+.contact-location {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-name { font-size: 0.86rem; }
+
+.contact-location {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.contact-row.is-active .contact-location { color: rgba(0, 0, 0, 0.58); }
+
+.contact-row.is-active .contact-priority {
+  border-color: rgba(0, 0, 0, 0.25);
+  color: #111;
+}
+
+.workspace {
+  min-width: 0;
+  padding: clamp(18px, 3vw, 42px);
+}
+
+.empty-state {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.composer {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(420px, 1.6fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.company-card,
+.message-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(14, 14, 19, 0.94);
+}
+
+.company-card {
+  position: sticky;
+  top: 22px;
+  padding: 22px;
+}
+
+.company-card.is-reached {
+  border-color: rgba(62, 224, 160, 0.45);
+  box-shadow: inset 3px 0 0 #3ee0a0;
+}
+
+.reached-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #3ee0a0;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.priority {
+  border-color: rgba(216, 255, 0, 0.32);
+  color: var(--acid);
+  background: var(--acid-soft);
+}
+
+.focus {
+  margin: 18px 0 22px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+dl {
+  display: grid;
+  gap: 17px;
+  margin: 0;
+}
+
+dt {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+dd {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+dd a { text-decoration-color: var(--acid); }
+
+.message-card { padding: clamp(20px, 3vw, 30px); }
+
+.language-switch {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.language-switch button {
+  min-width: 44px;
+  padding: 6px 10px;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.language-switch button.is-active {
+  color: #111;
+  background: var(--acid);
+}
+
+.opening-options {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0 16px;
+}
+
+.opening-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.opening-option:hover,
+.opening-option.is-active {
+  border-color: rgba(216, 255, 0, 0.55);
+  color: var(--ink);
+  background: var(--acid-soft);
+}
+
+.opening-option input { accent-color: var(--acid); }
+
+.opening-editor {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.opening-editor textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background: #09090d;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.opening-editor textarea:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.preview-heading {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.message-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.email-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1.3fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.email-fields label,
+.message-editor {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.email-fields input,
+.message-preview {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background: #09090d;
+  font-size: 0.86rem;
+}
+
+.email-fields input:focus,
+.message-preview:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.primary:disabled {
+  cursor: not-allowed;
+  border-color: var(--line);
+  color: var(--muted);
+  background: #1b1b22;
+  opacity: 1;
+  filter: none;
+}
+
+.secondary,
+.primary {
+  padding: 9px 13px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.secondary:hover { border-color: var(--acid); }
+
+.primary {
+  border-color: var(--acid);
+  color: #111;
+  background: var(--acid);
+}
+
+.primary:hover { filter: brightness(0.88); }
+
+.message-preview {
+  min-height: 360px;
+  margin: 0;
+  resize: vertical;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: #d9d9df;
+  font-family: inherit;
+  line-height: 1.62;
+}
+
+.copy-status {
+  min-height: 1.2em;
+  margin: 9px 0 0;
+  color: var(--acid);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 240px minmax(0, 1fr); }
+  .composer { grid-template-columns: 1fr; }
+  .company-card { position: static; }
+}
+
+@media (max-width: 680px) {
+  .topbar {
+    grid-template-columns: auto 1fr;
+    padding: 15px 18px;
+  }
+  .session-box { justify-self: end; }
+  .safe-mode { display: none; }
+  main { display: block; }
+  .contacts-panel {
+    height: auto;
+    max-height: 45vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .workspace { padding: 16px; }
+  .message-heading,
+  .preview-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .copy-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .email-fields { grid-template-columns: 1fr; }
+}
+
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">RA<span>*</span></a>
+    <div>
+      <p class="eyebrow">Production outreach</p>
+      <h1>Message composer</h1>
+    </div>
+    <p id="reached-count" class="reached-count">Reached 0 / 0</p>
+    <p id="mode-banner" class="mode-banner" hidden>Copy mode</p>
+    <div class="session-box">
+      <span id="session-label">Not logged in</span>
+      <button id="login-open" class="secondary" type="button">Log in</button>
+      <button id="logout" class="secondary" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <aside class="contacts-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Contact sheet</p>
+          <h2>Studios</h2>
+        </div>
+        <span id="contact-count" class="count">—</span>
+      </div>
+
+      <label class="search">
+        <span class="sr-only">Search contacts</span>
+        <input id="search" type="search" placeholder="Search company or country…" autocomplete="off">
+      </label>
+
+      <div class="filters" aria-label="Priority filter">
+        <button class="filter is-active" type="button" data-priority="all">All</button>
+        <button class="filter" type="button" data-priority="5">Priority 5</button>
+        <button class="filter" type="button" data-priority="4">4+</button>
+        <button class="filter" type="button" data-reach="reached">Reached</button>
+        <button class="filter" type="button" data-reach="open">Open</button>
+      </div>
+
+      <div id="contact-list" class="contact-list" role="listbox" aria-label="Production contacts"></div>
+    </aside>
+
+    <section class="workspace">
+      <div id="empty-state" class="empty-state">
+        <p>Loading contacts…</p>
+      </div>
+
+      <div id="composer" class="composer" hidden>
+        <section class="company-card">
+          <div class="company-title">
+            <div>
+              <p id="company-location" class="eyebrow"></p>
+              <h2 id="company-name"></h2>
+            </div>
+            <span id="company-priority" class="priority"></span>
+            <label class="reached-toggle">
+              <input id="company-reached" type="checkbox">
+              <span>Reached</span>
+            </label>
+          </div>
+          <p id="company-focus" class="focus"></p>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd><a id="company-email"></a></dd>
+            </div>
+            <div>
+              <dt>Website</dt>
+              <dd><a id="company-website" target="_blank" rel="noreferrer">Open site ↗</a></dd>
+            </div>
+            <div>
+              <dt>Current signal</dt>
+              <dd id="company-signal"></dd>
+            </div>
+            <div>
+              <dt>Research note</dt>
+              <dd id="company-hook"></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="message-card">
+          <div class="message-heading">
+            <div>
+              <p class="eyebrow">Compose</p>
+              <h2>Choose an opening</h2>
+            </div>
+            <div class="language-switch" aria-label="Message language">
+              <button id="lang-cz" type="button" data-language="cz">CZ</button>
+              <button id="lang-en" type="button" data-language="en">EN</button>
+            </div>
+          </div>
+
+          <div id="opening-options" class="opening-options"></div>
+
+          <label class="opening-editor">
+            <span>Your opening — editable</span>
+            <textarea id="opening" rows="3"></textarea>
+          </label>
+
+          <div class="preview-heading">
+            <div>
+              <p class="eyebrow">Full email — editable</p>
+              <p id="message-meta" class="message-meta"></p>
+            </div>
+            <div class="copy-actions">
+              <button id="reset-message" class="secondary" type="button">Reset from opening</button>
+              <button id="copy-opening" class="secondary" type="button">Copy opening</button>
+              <button id="copy-message" class="secondary" type="button">Copy full message</button>
+              <button id="send-message" class="primary" type="button">Send this email</button>
+            </div>
+          </div>
+
+          <div class="email-fields">
+            <label>
+              <span>To</span>
+              <input id="message-to" type="email" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>Subject</span>
+              <input id="message-subject" type="text" autocomplete="off">
+            </label>
+          </div>
+          <label class="message-editor">
+            <span class="sr-only">Email body</span>
+            <textarea id="message-preview" class="message-preview" rows="18"></textarea>
+          </label>
+          <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <template id="contact-template">
+    <div class="contact-row" role="option">
+      <label class="reach-check">
+        <input type="checkbox" class="contact-reached">
+        <span class="sr-only">Reached</span>
+      </label>
+      <button class="contact-select" type="button">
+        <strong class="contact-name"></strong>
+        <small class="contact-location"></small>
+      </button>
+      <span class="contact-priority"></span>
+    </div>
+  </template>
+
+  <div id="login-overlay" class="login-overlay" hidden>
+    <form id="login-form" class="login-card">
+      <p class="eyebrow">Gmail login</p>
+      <h2>Send from your account</h2>
+      <p id="login-copy" class="login-copy">Můžeš skládat a kopírovat maily bez přihlášení. Odesílání z appky potřebuje Gmail App Password z <strong>myaccount.google.com/apppasswords</strong>, ne běžné heslo. Spouštěj to na Macu (Open Composer.command) — Gmail cloud často blokuje.</p>
+      <label>
+        <span>Email</span>
+        <input id="login-user" type="email" autocomplete="username" spellcheck="false" value="rich.andrys@gmail.com">
+      </label>
+      <label>
+        <span>App Password</span>
+        <input id="login-password" type="password" autocomplete="current-password">
+      </label>
+      <label class="remember">
+        <input id="login-remember" type="checkbox" checked>
+        <span>Remember on this computer</span>
+      </label>
+      <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
+      <div class="login-actions">
+        <button id="login-submit" class="primary" type="submit">Log in</button>
+        <button id="login-skip" class="secondary" type="button">Pokračovat bez odesílání</button>
+      </div>
+    </form>
+  </div>
+
+<script>
+window.EMBEDDED_CONTACTS = {"contacts": [{"company": "BareBear Production", "country": "Czechia", "city": "Prague / Zlín", "website": "https://www.bbp.studio/", "contact_email": "info@bbp.studio", "contact_page": "https://www.bbp.studio/hiring", "focus": "3D/2D animation, CGI, VFX, compositing and editing", "signal": "Public hiring page for 3D Lighter/Compositor and Scripter/TD.", "why_fit": "Exact match for full-shot or partial 3D/VFX support.", "personalization_hook": "Mention their hiring page and offer freelance capacity across 3D, lighting and compositing.", "priority": "5", "outreach_language": "Czech", "status": "new", "source_url": "https://www.bbp.studio/hiring", "verified_on": "2026-09-26"}, {"company": "Magiclab", "country": "Czechia", "city": "Prague", "website": "https://www.magiclab.film/", "contact_email": "info@magiclab.film", "contact_page": "https://www.magiclab.film/contact/", "focus": "Film post-production, VFX, CGI, FX, matte painting and DI", "signal": "Showreel 2025 and public CG Supervisor and DI Production Manager openings.", "why_fit": "International film and series work can create demand for specialized CG/VFX capacity.", "personalization_hook": "Reference the 2025 reel and offer autonomous shot delivery or pipeline overflow.", "priority": "5", "outreach_language": "Czech / English", "status": "new", "source_url": "https://www.magiclab.film/jobs/cg-supervisor/", "verified_on": "2026-09-26"}, {"company": "Three Bohemians", "country": "Czechia", "city": "Prague", "website": "https://threebohemians.studio/", "contact_email": "marek@threebohemians.com", "contact_page": "https://threebohemians.studio/contact/", "focus": "3D animation, cinematics, Unreal Engine, lighting and mocap cleanup", "signal": "Careers page invites freelance Unreal artists for an upcoming game project.", "why_fit": "They explicitly work with external talent and both complete and partial production units.", "personalization_hook": "Reference Kingdom Come: Deliverance II and offer animation, lighting or shot delivery.", "priority": "5", "outreach_language": "Czech / English", "status": "new", "source_url": "https://threebohemians.studio/career/", "verified_on": "2026-09-26"}, {"company": "UPP", "country": "Czechia", "city": "Prague", "website": "https://www.upp.cz/", "contact_email": "newbusiness.adv@upp.cz", "contact_page": "https://upp.cz/contact/", "focus": "Film and advertising VFX, virtual production, 3D scan, editorial and grading", "signal": "Public 2D Compositor opening and recent award-winning advertising VFX work.", "why_fit": "High shot volume across film and advertising suits matchmove, modeling, lighting and comp overflow.", "personalization_hook": "Reference the Just Eat VFX work and use the dedicated advertising contact.", "priority": "5", "outreach_language": "Czech / English", "status": "new", "source_url": "https://upp.cz/job/2d-compositor/", "verified_on": "2026-09-26"}, {"company": "PFX", "country": "Czechia / Slovakia", "city": "Prague / Bratislava", "website": "https://pfx.tv/", "contact_email": "projects@pfx.tv", "contact_page": "https://pfx.tv/contact/", "focus": "VFX, 3D animation, post-production, lighting, rendering and compositing", "signal": "Large shared Central European pipeline spanning film, advertising and animation.", "why_fit": "The service range closely matches full-shot and discipline-specific freelance support.", "personalization_hook": "Offer flexible capacity for 3D, lighting, rendering and compositing through the project contact.", "priority": "5", "outreach_language": "Czech / English", "status": "new", "source_url": "https://pfx.tv/contact/", "verified_on": "2026-09-26"}, {"company": "Apollon Studio", "country": "Slovakia", "city": "Bratislava", "website": "https://apollonstudio.com/", "contact_email": "info@apollonstudio.com", "contact_page": "https://apollonstudio.com/contact/", "focus": "Commercials, food shots, 3D/CGI, VFX and post-production", "signal": "Public 3D/CGI Artist: Nature opening for modeling, animation and simulations.", "why_fit": "The hiring signal directly confirms demand for relevant 3D skills.", "personalization_hook": "Send relevant environment, simulation, lighting or full-CGI-shot samples.", "priority": "5", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://www.apollonstudio.com/careers/cg-artist-nature", "verified_on": "2026-09-26"}, {"company": "Studio 727", "country": "Slovakia", "city": "Bratislava", "website": "https://727.sk/", "contact_email": "studio@727.sk", "contact_page": "https://727.sk/", "focus": "VFX, 3D, tracking, compositing, rotoscoping and virtual production", "signal": "Recent face and full-body scanning projects are featured on the site.", "why_fit": "Direct match for matchmove, digital assets, animation, lighting and compositing.", "personalization_hook": "Reference face scanning and offer cleanup, retopology, lookdev and integration.", "priority": "5", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://727.sk/References/FaceScanSystem", "verified_on": "2026-09-26"}, {"company": "Imagine Studio", "country": "Czechia", "city": "Prague", "website": "https://imaginestudio.cz/", "contact_email": "info@imaginestudio.cz", "contact_page": "https://imaginestudio.cz/contact", "focus": "Boutique VFX and digital post-production for ads, film, TV and online", "signal": "Portfolio includes recent Tipsport, Vodafone, T-Mobile and iStyle campaigns.", "why_fit": "A compact VFX studio is a realistic buyer of autonomous shots and peak-load support.", "personalization_hook": "Reference Tipsport Image 2025 or iStyle and offer tracking, CGI integration and comp.", "priority": "5", "outreach_language": "Czech", "status": "new", "source_url": "https://imaginestudio.cz/commercial/tipsport-image-2025-1", "verified_on": "2026-09-26"}, {"company": "Blue Faces", "country": "Slovakia", "city": "Bratislava", "website": "https://blue-faces.com/", "contact_email": "info@blue-faces.com", "contact_page": "https://blue-faces.com/contact-us/", "focus": "VFX and 2D/3D animation, matchmove, modeling, simulation, lighting and rendering", "signal": "The Legacy of Adam is listed in production and the studio expanded its 2D department.", "why_fit": "Their services almost exactly match the offered freelance range.", "personalization_hook": "Mention The Legacy of Adam and offer asset, animation, lighting or final comp support.", "priority": "5", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://blue-faces.com/vfx/the-legacy-of-adam/", "verified_on": "2026-09-26"}, {"company": "TeapotVFX", "country": "Slovakia", "city": "Bratislava", "website": "https://www.teapotvfx.com/", "contact_email": "vfx@teapotvfx.com", "contact_page": "https://www.teapotvfx.com/sk/contact/", "focus": "Boutique VFX/CGI, scanning, mocap, matchmove, compositing and grading", "signal": "The studio states that it scales through freelancers and partner studios.", "why_fit": "Explicit freelancer-friendly model and a direct match for end-to-end shots.", "personalization_hook": "Reference their matchmove work and offer a complete shot from track through grading.", "priority": "5", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://www.teapotvfx.com/about/", "verified_on": "2026-09-26"}, {"company": "Eallin", "country": "Czechia / Slovakia", "city": "Prague / Bratislava", "website": "https://eallin.com/", "contact_email": "hello@eallin.com", "contact_page": "https://eallin.com/contact/", "focus": "International 2D/3D animation, stop motion, motion graphics and art direction", "signal": "The contact page includes a dedicated artist commissioning route.", "why_fit": "Its flexible production network may need specialized 3D or compositing support.", "personalization_hook": "Send a stylistically varied reel and stress adaptability to different art directions.", "priority": "4", "outreach_language": "English", "status": "new", "source_url": "https://eallin.com/contact/", "verified_on": "2026-09-26"}, {"company": "Stone PP", "country": "Slovakia", "city": "Bratislava", "website": "http://www.stonepp.tv/", "contact_email": "office@stonepp.tv", "contact_page": "http://www.stonepp.tv/", "focus": "Commercial and film post-production, motion design, 2D/3D and VFX", "signal": "Active full-service studio; no dated hiring signal is public.", "why_fit": "A smaller commercial post house may need specialist 3D help during peaks.", "personalization_hook": "Offer rapid ownership of a commercial shot from tracking to final composite.", "priority": "4", "outreach_language": "Slovak", "status": "new", "source_url": "http://www.stonepp.tv/", "verified_on": "2026-09-26"}, {"company": "Silencio FX", "country": "Czechia", "city": "Prague", "website": "https://silencio.cz/", "contact_email": "produkce@silencio.cz", "contact_page": "https://silencio.cz/", "focus": "Production and post-production with picture and sound facilities", "signal": "The official site maintains an active recent-work section.", "why_fit": "Its combined production and post setup can use partial VFX or complete-shot delivery.", "personalization_hook": "Offer camera tracking, CGI integration, compositing and final delivery as one package.", "priority": "4", "outreach_language": "Czech", "status": "new", "source_url": "https://silencio.cz/", "verified_on": "2026-09-26"}, {"company": "Frame4Future", "country": "Czechia", "city": "Prague", "website": "https://www.frame4future.cz/en/", "contact_email": "info@frame4future.cz", "contact_page": "https://www.frame4future.cz/en/", "focus": "3D, AI, motion design, VFX, Flame, Maya, Cinema 4D and Unreal", "signal": "The studio says it scales its team for large and parallel projects.", "why_fit": "Its network model is well suited to additional freelance capacity.", "personalization_hook": "Name compatible software and offer overflow shots under their supervision.", "priority": "4", "outreach_language": "Czech / English", "status": "new", "source_url": "https://www.frame4future.cz/en/", "verified_on": "2026-09-26"}, {"company": "Bistro Films", "country": "Czechia", "city": "Prague", "website": "https://www.bistrofilms.com/", "contact_email": "jirka@bistrofilms.com", "contact_page": "https://www.bistrofilms.com/contact", "focus": "Advertising and branded-film production", "signal": "Portfolio includes Pilsner Urquell Image 2025 and work for major brands.", "why_fit": "A production without a declared internal VFX department may commission external post shots.", "personalization_hook": "Reference Pilsner Urquell Image 2025 and offer CGI/VFX support for treatments in development.", "priority": "4", "outreach_language": "Czech", "status": "new", "source_url": "https://www.bistrofilms.com/work", "verified_on": "2026-09-26"}, {"company": "Punk Film", "country": "Czechia", "city": "Prague", "website": "https://punkfilm.cz/", "contact_email": "office@punkfilm.cz", "contact_page": "https://www.punkfilm.cz/about", "focus": "Advertising, film and television production and production services", "signal": "The site lists a film in production and recent major-brand commercials.", "why_fit": "The production works with post studios and may commission specialist external shots.", "personalization_hook": "Reference a visually demanding commercial and offer one owner for the whole post shot.", "priority": "4", "outreach_language": "Czech / English", "status": "new", "source_url": "https://punkfilm.cz/work", "verified_on": "2026-09-26"}, {"company": "Studio Za Komínem", "country": "Czechia", "city": "Prague", "website": "https://www.studiozakominem.cz/en/", "contact_email": "info@studiozakominem.cz", "contact_page": "https://www.studiozakominem.cz/en/", "focus": "Editing, grading, VFX, motion graphics, 3ds Max animation and sound", "signal": "Current portfolio spans film, documentary and advertising work.", "why_fit": "Its broad post setup can be supplemented with 3D, tracking and rendering capacity.", "personalization_hook": "Mention compatibility with its Nuke, After Effects and 3ds Max workflow.", "priority": "4", "outreach_language": "Czech / English", "status": "new", "source_url": "https://www.studiozakominem.cz/en/", "verified_on": "2026-09-26"}, {"company": "artFX Studio", "country": "Slovakia", "city": "Bratislava", "website": "http://www.fxstudio.sk/", "contact_email": "fx@fxstudio.sk", "contact_page": "http://www.fxstudio.sk/", "focus": "Editing, sound, grading and 2D/3D FX in Resolve, Fusion and Blender", "signal": "Long-running end-to-end post studio; no dated hiring signal is public.", "why_fit": "A small generalist studio can need specialist or peak-load 3D support.", "personalization_hook": "Stress Blender/Fusion compatibility and delivery through final grade.", "priority": "4", "outreach_language": "Slovak", "status": "new", "source_url": "http://www.fxstudio.sk/", "verified_on": "2026-09-26"}, {"company": "Hitchhiker Films", "country": "Slovakia", "city": "Bratislava", "website": "https://hitchhikerfilms.sk/", "contact_email": "info@hiker.sk", "contact_page": "https://hitchhikerfilms.sk/", "focus": "TV commercials, international production services and in-house offline editing", "signal": "Active production site with extensive TV commercial experience.", "why_fit": "An offline-equipped production can be a direct buyer of external online and VFX work.", "personalization_hook": "Offer online/VFX capacity that follows smoothly from their internal offline edit.", "priority": "4", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://hitchhikerfilms.sk/", "verified_on": "2026-09-26"}, {"company": "Tru Kru Studio", "country": "Slovakia", "city": "Bratislava", "website": "https://www.trukru.studio/", "contact_email": "info@trukru.studio", "contact_page": "https://www.trukru.studio/", "focus": "Motion design, art direction, 3D visuals and advertising animation", "signal": "Portfolio features work for banks, telecoms and consumer brands.", "why_fit": "Good fit for motion and product CGI, though less focused on film matchmove.", "personalization_hook": "Offer photoreal 3D, simulations, lighting and rendering to complement the motion team.", "priority": "3", "outreach_language": "Slovak / English", "status": "new", "source_url": "https://www.trukru.studio/", "verified_on": "2026-09-26"}, {"company": "THE RENDERERS", "country": "Austria", "city": "Graz", "website": "https://trvp.at/", "contact_email": "jobs@trvp.at", "contact_page": "https://trvp.at/career", "focus": "CGI, VFX, animation and product and industrial visualization", "signal": "Public freelance roles include VFX/CG Compositor and several 3D disciplines.", "why_fit": "Explicit freelance demand across modeling, animation and compositing.", "personalization_hook": "Reference technical or product work and apply against the relevant freelance role.", "priority": "5", "outreach_language": "English / German", "status": "new", "source_url": "https://trvp.at/career", "verified_on": "2026-09-26"}, {"company": "GLID Studio", "country": "Switzerland", "city": "Lausanne", "website": "https://www.glidstudio.ch/", "contact_email": "hello@glidstudio.ch", "contact_page": "https://www.glidstudio.ch/info", "focus": "3D design, animation, motion, luxury and retail CGI", "signal": "The studio builds custom international teams and invites portfolios.", "why_fit": "Flexible project teams are a natural fit for an external 3D generalist.", "personalization_hook": "Reference Cellcosmet or the Swatch Times Square campaign.", "priority": "5", "outreach_language": "English / French", "status": "new", "source_url": "https://www.glidstudio.ch/info", "verified_on": "2026-09-26"}, {"company": "Orange FX", "country": "Netherlands", "city": "", "website": "https://orangefx.nl/", "contact_email": "", "contact_page": "https://orangefx.nl/", "focus": "Compositing, animation, motion graphics and on-set VFX", "signal": "The studio says it scales projects with trusted freelance specialists.", "why_fit": "One of the clearest freelance signals for comp, cleanup and set extensions.", "personalization_hook": "Offer dependable shot-based support for invisible VFX and screen replacements.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://orangefx.nl/", "verified_on": "2026-09-26"}, {"company": "Komposit", "country": "Belgium", "city": "Namur / Brussels", "website": "https://www.komposit.be/", "contact_email": "info@komposit.be", "contact_page": "https://www.komposit.be/about/", "focus": "Film and series VFX, animation and motion design", "signal": "The studio is constantly seeking compositors, 3D generalists and FX artists for a semi-remote pipeline.", "why_fit": "Explicit remote talent signal for exactly the relevant roles.", "personalization_hook": "Reference its CG engine and set-extension work and state remote availability.", "priority": "5", "outreach_language": "English / French", "status": "new", "source_url": "https://www.komposit.be/about/", "verified_on": "2026-09-26"}, {"company": "MediaCraft", "country": "Poland", "city": "Warsaw", "website": "https://mediacraft.pl/", "contact_email": "makaruk@mediacraft.video", "contact_page": "https://mediacraft.pl/jobs/", "focus": "3D animation, motion graphics, CGI, VR and projection mapping", "signal": "Public remote-EU freelance/project-based 3D and motion role.", "why_fit": "Direct match for modeling, lighting, simulations and post-processing.", "personalization_hook": "Respond to the role with a video reel, availability and rate.", "priority": "5", "outreach_language": "English / Polish", "status": "new", "source_url": "https://mediacraft.pl/jobs/", "verified_on": "2026-09-26"}, {"company": "NOLABEL", "country": "Poland", "city": "Kraków", "website": "https://nolabel.com.pl/", "contact_email": "jobs@nolabel.com.pl", "contact_page": "https://nolabel.com.pl/join-us/", "focus": "High-end VFX, CGI, simulations and compositing", "signal": "Public 3D Generalist opening and open applications.", "why_fit": "Strong fit for lighting, FX and shot compositing in a larger pipeline.", "personalization_hook": "Reference the full-CG water and storm work on Heweliusz.", "priority": "5", "outreach_language": "English / Polish", "status": "new", "source_url": "https://nolabel.com.pl/join-us/", "verified_on": "2026-09-26"}, {"company": "Cinematic", "country": "Sweden", "city": "Stockholm", "website": "https://www.cinematic.se/", "contact_email": "contact@cinematic.se", "contact_page": "https://www.cinematic.se/contact", "focus": "Animation, motion, VFX, commercials and game content", "signal": "The studio explicitly invites talented remote freelancers.", "why_fit": "Direct remote freelance lead for animation, motion and VFX.", "personalization_hook": "Tailor the reel to its advertising and games mix.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://www.cinematic.se/contact", "verified_on": "2026-09-26"}, {"company": "Expanse", "country": "Norway", "city": "Oslo", "website": "https://www.expanse.no/", "contact_email": "talent@expanse.no", "contact_page": "https://www.expanse.no/", "focus": "Feature VFX, 3D animation, matchmove, lighting and compositing", "signal": "The studio is expanding its artist network after a roughly 500-shot project.", "why_fit": "Strong project pipeline and explicit talent contact.", "personalization_hook": "Reference the character and VFX work on A Mouse Hunt for Christmas.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://www.expanse.no/", "verified_on": "2026-09-26"}, {"company": "Netron", "country": "Norway", "city": "Fredrikstad", "website": "https://netron.no/en/", "contact_email": "malin@netron.no", "contact_page": "https://netron.no/en/freelancer-for-netron/", "focus": "Film, animation, 3D, VFX, Unreal, VR and virtual production", "signal": "Active 2026 freelancer intake form records skills and availability.", "why_fit": "A direct route into a broad freelance production database.", "personalization_hook": "Use the freelancer form and mention Unreal or virtual-production experience where relevant.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://netron.no/en/freelancer-for-netron/", "verified_on": "2026-09-26"}, {"company": "Vanite", "country": "Finland", "city": "Helsinki", "website": "https://vanite.fi/", "contact_email": "hello@vanite.fi", "contact_page": "https://vanite.fi/about/", "focus": "2D/3D animation, VFX, product rendering and compositing", "signal": "The studio says it collaborates flexibly with a network of freelancers.", "why_fit": "Realistic external-capacity lead in a small artist-driven studio.", "personalization_hook": "Reference Sanoma Kartturi or the Planted product renders.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://vanite.fi/about/", "verified_on": "2026-09-26"}, {"company": "Storz & Escherich", "country": "Germany", "city": "Berlin", "website": "https://www.storzescherich.de/", "contact_email": "info@storzescherich.de", "contact_page": "https://www.storzescherich.de/jobs/", "focus": "CGI, VFX, motion design and Nuke compositing", "signal": "The site lists 3D, compositing and motion hiring for upcoming projects.", "why_fit": "Strong skills match, though openings may be primarily in-house.", "personalization_hook": "Offer remote short-term capacity connecting CGI and compositing.", "priority": "4", "outreach_language": "English / German", "status": "new", "source_url": "https://www.storzescherich.de/jobs/", "verified_on": "2026-09-26"}, {"company": "VFXbox", "country": "Germany", "city": "Nuremberg / Berlin", "website": "https://vfxbox.de/", "contact_email": "mail@vfxbox.de", "contact_page": "https://vfxbox.de/jobs/", "focus": "Film VFX, 3D, FX and motion design", "signal": "Careers page lists FX Artist and 3D Generalist and accepts general portfolios.", "why_fit": "Close fit for autonomous shot work and invisible VFX.", "personalization_hook": "Reference set extensions, invisible effects or technical product animation.", "priority": "4", "outreach_language": "English / German", "status": "new", "source_url": "https://vfxbox.de/jobs/", "verified_on": "2026-09-26"}, {"company": "ISTUDIOS VFX", "country": "Sweden", "city": "Karlskrona", "website": "https://www.istudios.se/", "contact_email": "jobs@istudios.se", "contact_page": "https://www.istudios.se/jobs", "focus": "VFX, 3D animation, game trailers and virtual production", "signal": "No open role, but the studio explicitly expands its freelance artist network.", "why_fit": "Good fit for shot work, assets, FX and virtual-production environments.", "personalization_hook": "Reference Doctor Who, CK3 trailers or its virtual-production workflow.", "priority": "4", "outreach_language": "English", "status": "new", "source_url": "https://www.istudios.se/jobs", "verified_on": "2026-09-26"}, {"company": "Filmic Animation", "country": "Sweden", "city": "Stockholm", "website": "https://filmic.se/en/", "contact_email": "jobb@filmic.se", "contact_page": "https://filmic.se/en/contact/", "focus": "3D/2D animation, characters, rigging, simulations and compositing", "signal": "Its talent contact invites experienced 3D and comp artists to send reels.", "why_fit": "Solid match for generalist animation and compositing support.", "personalization_hook": "Reference The Spider or the ongoing Gnuttarna 3D stories.", "priority": "4", "outreach_language": "English", "status": "new", "source_url": "https://filmic.se/en/contact/", "verified_on": "2026-09-26"}, {"company": "How How", "country": "Poland", "city": "Poznań", "website": "https://howhow.pl/en/", "contact_email": "praca@howhow.pl", "contact_page": "https://howhow.pl/en/join-us/", "focus": "2D/3D advertising animation, modeling and product films", "signal": "Careers page lists a 3D Generalist/Animator role.", "why_fit": "Good generalist match, though the opening is not explicitly freelance.", "personalization_hook": "Send one strongest piece as requested and offer project-based remote support.", "priority": "4", "outreach_language": "English / Polish", "status": "new", "source_url": "https://howhow.pl/en/join-us/", "verified_on": "2026-09-26"}, {"company": "MAD / Fools for Motion", "country": "Netherlands", "city": "Almelo", "website": "https://www.studiomad.nl/", "contact_email": "info@studiomad.nl", "contact_page": "https://www.studiomad.nl/contact", "focus": "3D motion, CGI, procedural VFX and product films", "signal": "Portfolio includes recent product and industrial CGI projects.", "why_fit": "A compact specialist team may need modeling, lighting and simulation overflow.", "personalization_hook": "Reference the procedural simulation work for Normfinish.", "priority": "3", "outreach_language": "English", "status": "new", "source_url": "https://www.studiomad.nl/cases/normfinish-blasting-cabinets", "verified_on": "2026-09-26"}, {"company": "Studio Ripple", "country": "Netherlands", "city": "Amsterdam / Eindhoven", "website": "https://studioripple.nl/", "contact_email": "", "contact_page": "https://studioripple.nl/", "focus": "3D animation, VFX, matchmove, compositing and archviz", "signal": "The studio advertises a C4D, Redshift and Nuke matchmove pipeline.", "why_fit": "Nearly complete technical fit, but no public freelance call.", "personalization_hook": "Mention C4D/Redshift assets, matchmove and Nuke compositing if relevant.", "priority": "3", "outreach_language": "English", "status": "new", "source_url": "https://studioripple.nl/", "verified_on": "2026-09-26"}, {"company": "CFX", "country": "Finland", "city": "Helsinki", "website": "https://cfx.fi/", "contact_email": "anton@cfx.fi", "contact_page": "https://cfx.fi/about/", "focus": "VFX and 3D animation for commercials, series and games", "signal": "A public contact is specifically labeled for collaborations.", "why_fit": "Relevant project studio, though there is no public freelance invitation.", "personalization_hook": "Reference Icebreaker Main Title or Angry Birds 3D Billboard.", "priority": "3", "outreach_language": "English", "status": "new", "source_url": "https://cfx.fi/about/", "verified_on": "2026-09-26"}, {"company": "Found Studio", "country": "UK", "city": "London", "website": "https://www.found-studio.com/", "contact_email": "jobs@found-studio.com", "contact_page": "https://www.found-studio.com/contact/", "focus": "3D motion design, CGI and brand films", "signal": "Current Midweight 3D Motion Designer and Senior Producer openings.", "why_fit": "Strong fit for full-shot CG and product or brand-campaign overflow.", "personalization_hook": "Mention its combined CGI and ComfyUI workflow on London Craft Week.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://www.found-studio.com/contact/", "verified_on": "2026-09-26"}, {"company": "Builders Club", "country": "UK", "city": "London", "website": "https://builders-club.com/", "contact_email": "enquiries@builders-club.com", "contact_page": "https://builders-club.com/contact", "focus": "CGI, live action, AI, design and advertising", "signal": "The site invites full-time and freelance applications from digital artists and motion designers.", "why_fit": "Open freelance roster and multidisciplinary production align with full-shot support.", "personalization_hook": "Reference its combination of CGI, live action and AI for global brands.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://builders-club.com/contact", "verified_on": "2026-09-26"}, {"company": "Flipbook Studio", "country": "UK", "city": "Manchester", "website": "https://www.flipbookstudio.co.uk/", "contact_email": "jobs@flipbookstudio.co.uk", "contact_page": "https://www.flipbookstudio.co.uk/careers-flipbookstudio-co-uk/", "focus": "Animation, VFX, CGI and immersive content", "signal": "The studio explicitly seeks freelance 3D animators, CGI generalists and modelers.", "why_fit": "One of the closest matches for a European 3D generalist.", "personalization_hook": "Respond directly to its freelance CGI-generalist demand and state availability.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://www.flipbookstudio.co.uk/news/current-positions-permanent-freelance/", "verified_on": "2026-09-26"}, {"company": "Bomper Studio", "country": "UK", "city": "Caerphilly", "website": "https://bomperstudio.com/", "contact_email": "", "contact_page": "https://bomperstudio.com/contact-bomper-studio", "focus": "3D animation, character, product CGI and VFX", "signal": "Careers page says it continually seeks full-time and freelance artists.", "why_fit": "A boutique studio with broad 3D work is suitable for a full-shot generalist.", "personalization_hook": "Reference its LEGO x SCHEELS or Bose product work.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://bomperstudio.com/careers", "verified_on": "2026-09-26"}, {"company": "Glassworks", "country": "UK", "city": "London", "website": "https://glassworksvfx.com/", "contact_email": "recruitment.lon@glassworksvfx.com", "contact_page": "https://glassworksvfx.com/jobs", "focus": "VFX, CGI, compositing, animation, colour and experiential", "signal": "Jobs page says it continually seeks talent for onsite and remote work.", "why_fit": "Broad remote-capable VFX pipeline suits CG and comp overflow.", "personalization_hook": "Mention the ability to bridge 3D/CGI, environments, FX and compositing.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://glassworksvfx.com/jobs", "verified_on": "2026-09-26"}, {"company": "FutureDeluxe", "country": "UK", "city": "London", "website": "https://futuredeluxe.com/", "contact_email": "talent@futuredeluxe.com", "contact_page": "https://futuredeluxe.com/info", "focus": "Experimental CGI, motion, design and technology", "signal": "The studio explicitly accepts freelance applications.", "why_fit": "Strong target for a technically capable generalist with design sensitivity.", "personalization_hook": "Reference Volvo EX60, Powerbeats Pro 2 or experimental R&D.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://futuredeluxe.com/info", "verified_on": "2026-09-26"}, {"company": "Territory Studio", "country": "UK", "city": "London", "website": "https://territorystudio.com/", "contact_email": "recruitment@territorystudio.com", "contact_page": "https://territorystudio.com/jobs", "focus": "Motion design, VFX, screen graphics and experiential", "signal": "The site lists freelance TD, FX and lighting roles.", "why_fit": "Its project-based specialist model fits film shots and lighting or FX overflow.", "personalization_hook": "Show film storytelling and multi-discipline shot ownership.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://territorystudio.com/jobs", "verified_on": "2026-09-26"}, {"company": "Black Kite Studios", "country": "UK", "city": "London", "website": "https://blackkitestudios.com/", "contact_email": "", "contact_page": "https://joinus.blackkitestudios.com/jobs", "focus": "High-end advertising VFX and design", "signal": "Careers site lists freelance expressions of interest and multiple CG/VFX roles.", "why_fit": "Independent ad-VFX studio with explicit demand for flexible capacity.", "personalization_hook": "Use the relevant application form and show photoreal and stylized work.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://joinus.blackkitestudios.com/jobs", "verified_on": "2026-09-26"}, {"company": "Untold Studios", "country": "UK", "city": "London", "website": "https://untoldstudios.tv/", "contact_email": "garreth@untoldstudios.tv", "contact_page": "https://careers.untoldstudios.tv/jobs", "focus": "VFX, design, production and technology", "signal": "Current freelance FX and Houdini CFX roles plus a general application.", "why_fit": "Direct freelance signal for asset, FX and shot support.", "personalization_hook": "State precise Houdini, CFX or shot-finishing skills and European time zone.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://careers.untoldstudios.tv/jobs", "verified_on": "2026-09-26"}, {"company": "Piranha Bar", "country": "Ireland", "city": "Dublin", "website": "https://piranhabar.ie/", "contact_email": "talent@piranhabar.ie", "contact_page": "https://piranhabar.ie/contact/", "focus": "Commercials, VFX, animation, broadcast and originals", "signal": "The contact page provides a dedicated Work with us route.", "why_fit": "Boutique/mid-size studio with both advertising and VFX departments.", "personalization_hook": "Offer support from CG setup through final shot.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://piranhabar.ie/contact/", "verified_on": "2026-09-26"}, {"company": "Parallel Studio", "country": "France", "city": "Paris", "website": "https://parallelstudio.tv/", "contact_email": "job@parallelstudio.tv", "contact_page": "https://parallelstudio.tv/about", "focus": "Animation, illustration, 2D/3D and luxury advertising", "signal": "The studio says it is always looking for talent and has a 2026 showreel.", "why_fit": "Boutique 3D studio is a good target for stylized full-shot work.", "personalization_hook": "Reference Porsche, TAG Heuer, Hermès or Rimowa and its poetic visual style.", "priority": "5", "outreach_language": "English / French", "status": "new", "source_url": "https://parallelstudio.tv/about", "verified_on": "2026-09-26"}, {"company": "Trizz", "country": "Spain", "city": "Barcelona", "website": "https://www.trizz.tv/", "contact_email": "jobs@trizz.tv", "contact_page": "https://www.trizz.tv/portfolio/contact", "focus": "Production, 3D animation, live action and VFX", "signal": "The contact page has an explicit Work with us channel.", "why_fit": "Direct match for remote overflow and complete CG shots in advertising.", "personalization_hook": "Reference Dettol Tru Clean or ISDIN and the live-action/3D blend.", "priority": "5", "outreach_language": "English / Spanish", "status": "new", "source_url": "https://www.trizz.tv/portfolio/contact", "verified_on": "2026-09-26"}, {"company": "SAUVAGE.TV", "country": "Spain", "city": "Barcelona", "website": "https://www.sauvage.tv/", "contact_email": "careers@sauvage.tv", "contact_page": "https://www.sauvage.tv/contact?_locale=0", "focus": "Creative production, post-production, animation and VFX", "signal": "Dedicated careers contact and talent form alongside major recent campaigns.", "why_fit": "In-house post and CG campaigns make flexible generalists relevant.", "personalization_hook": "Reference League of Legends: PARANOIA, Gatorade or STARLUX x Sorayama.", "priority": "5", "outreach_language": "English / Spanish", "status": "new", "source_url": "https://www.sauvage.tv/contact?_locale=0", "verified_on": "2026-09-26"}, {"company": "Tendril", "country": "Canada", "city": "Toronto", "website": "https://tendril.ca/", "contact_email": "careers@tendril.ca", "contact_page": "https://tendril.ca/contact/", "focus": "Design, animation, CGI and emerging technology", "signal": "The studio says it is always looking for talent and has a dedicated careers inbox.", "why_fit": "Design-led studio using Houdini, Unreal, AR and VR suits a technical generalist.", "personalization_hook": "Mention emotional design plus Houdini or Unreal production capability.", "priority": "5", "outreach_language": "English", "status": "new", "source_url": "https://tendril.ca/contact/", "verified_on": "2026-09-26"}, {"company": "Coffee & TV", "country": "UK", "city": "London", "website": "https://coffeeand.tv/", "contact_email": "jobs@coffeeand.tv", "contact_page": "https://coffeeand.tv/about/careers/", "focus": "Motion design, animation, VFX and colour", "signal": "Careers page accepts open applications in addition to listed roles.", "why_fit": "Large advertising post team can need freelance 3D/VFX overflow.", "personalization_hook": "Stress end-to-end delivery from asset and lookdev through comp.", "priority": "4", "outreach_language": "English", "status": "new", "source_url": "https://coffeeand.tv/about/careers/", "verified_on": "2026-09-26"}, {"company": "Windmill Lane", "country": "Ireland", "city": "Dublin", "website": "https://www.windmilllane.com/", "contact_email": "john.kennedy@windmilllane.com", "contact_page": "https://www.windmilllane.com/wlvfx-is-hiring/", "focus": "Film and TV VFX, advertising and post-production", "signal": "Public hiring page lists motion, FX, animation and CG roles with remote considered.", "why_fit": "European availability and full-shot skills fit its film and series work.", "personalization_hook": "Reference Bodkin, Doctor Who, Kin or Secret Level.", "priority": "4", "outreach_language": "English", "status": "new", "source_url": "https://www.windmilllane.com/wlvfx-is-hiring/", "verified_on": "2026-09-26"}, {"company": "Unit Image", "country": "France", "city": "Paris", "website": "https://www.unit-image.fr/", "contact_email": "contact@unit-image.fr", "contact_page": "https://www.unit-image.fr/jobs/", "focus": "High-end 3D animation, game cinematics and VFX", "signal": "Jobs page accepts general applications and lists FX and animation roles.", "why_fit": "Strong cinematic/full-CG fit, particularly with 3ds Max, V-Ray or Houdini.", "personalization_hook": "Reference Total War: Warhammer 40K, Secret Level or Marvel Rivals.", "priority": "4", "outreach_language": "English / French", "status": "new", "source_url": "https://www.unit-image.fr/jobs/", "verified_on": "2026-09-26"}, {"company": "Mathematic Studio", "country": "France", "city": "Paris", "website": "https://mathematic.tv/", "contact_email": "jobs@mathematic.tv", "contact_page": "https://mathematic.tv/contact/careers/", "focus": "VFX, animation, motion design and creative technology", "signal": "Dedicated jobs inbox on the official contact page.", "why_fit": "Its broad advertising and entertainment slate can use European overflow support.", "personalization_hook": "Include a concise breakdown of two or three shots.", "priority": "4", "outreach_language": "English / French", "status": "new", "source_url": "https://mathematic.tv/contact/careers/", "verified_on": "2026-09-26"}, {"company": "Onionlab", "country": "Spain", "city": "Barcelona", "website": "https://www.onionlab.com/", "contact_email": "jobs@onionlab.com", "contact_page": "https://www.onionlab.com/contact/", "focus": "Audiovisual installations, exhibitions, motion and immersive design", "signal": "The contact page explicitly directs applicants to jobs@.", "why_fit": "Suitable for a CG generalist with installation and motion interests.", "personalization_hook": "Stress loopable content, multiple deliverables or realtime workflow.", "priority": "4", "outreach_language": "English / Spanish", "status": "new", "source_url": "https://www.onionlab.com/contact/", "verified_on": "2026-09-26"}, {"company": "Screen Scene / SSVFX", "country": "Ireland", "city": "Dublin", "website": "https://screenscene.ie/", "contact_email": "ckeenan@ssvfx.ie", "contact_page": "https://screenscene.ie/contact", "focus": "Film, drama, commercials, VFX and post-production", "signal": "Its official reporting confirms use of temporary contract VFX artists.", "why_fit": "Relevant project-based VFX buyer, though no open roster is public.", "personalization_hook": "Offer concrete shot-based CG/VFX support to production.", "priority": "3", "outreach_language": "English", "status": "new", "source_url": "https://screenscene.ie/contact", "verified_on": "2026-09-26"}]};
+
+</script>
+<script>
+const state = {
+  contacts: [],
+  filtered: [],
+  selected: null,
+  language: "en",
+  priority: "all",
+  query: "",
+  openingIndex: 0,
+  sendConfigured: false,
+  sendFrom: "",
+  reached: {},
+  reachView: "all",
+  renderedCompany: "",
+  fileMode: false,
+};
+
+const elements = {
+  count: document.querySelector("#contact-count"),
+  list: document.querySelector("#contact-list"),
+  search: document.querySelector("#search"),
+  empty: document.querySelector("#empty-state"),
+  composer: document.querySelector("#composer"),
+  template: document.querySelector("#contact-template"),
+  companyName: document.querySelector("#company-name"),
+  companyLocation: document.querySelector("#company-location"),
+  companyPriority: document.querySelector("#company-priority"),
+  companyFocus: document.querySelector("#company-focus"),
+  companyEmail: document.querySelector("#company-email"),
+  companyWebsite: document.querySelector("#company-website"),
+  companySignal: document.querySelector("#company-signal"),
+  companyHook: document.querySelector("#company-hook"),
+  openings: document.querySelector("#opening-options"),
+  opening: document.querySelector("#opening"),
+  langCz: document.querySelector("#lang-cz"),
+  langEn: document.querySelector("#lang-en"),
+  preview: document.querySelector("#message-preview"),
+  messageTo: document.querySelector("#message-to"),
+  messageSubject: document.querySelector("#message-subject"),
+  meta: document.querySelector("#message-meta"),
+  resetMessage: document.querySelector("#reset-message"),
+  copyOpening: document.querySelector("#copy-opening"),
+  copyMessage: document.querySelector("#copy-message"),
+  sendMessage: document.querySelector("#send-message"),
+  copyStatus: document.querySelector("#copy-status"),
+  reachedCount: document.querySelector("#reached-count"),
+  companyReached: document.querySelector("#company-reached"),
+  companyCard: document.querySelector(".company-card"),
+  sessionLabel: document.querySelector("#session-label"),
+  loginOpen: document.querySelector("#login-open"),
+  logout: document.querySelector("#logout"),
+  loginOverlay: document.querySelector("#login-overlay"),
+  loginForm: document.querySelector("#login-form"),
+  loginUser: document.querySelector("#login-user"),
+  loginPassword: document.querySelector("#login-password"),
+  loginRemember: document.querySelector("#login-remember"),
+  loginStatus: document.querySelector("#login-status"),
+  loginSkip: document.querySelector("#login-skip"),
+  loginSubmit: document.querySelector("#login-submit"),
+  modeBanner: document.querySelector("#mode-banner"),
+};
+
+const REACHED_STORAGE_KEY = "outreach-reached";
+
+function apiAvailable() {
+  return location.protocol === "http:" || location.protocol === "https:";
+}
+
+function loadLocalReached() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REACHED_STORAGE_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalReached(rows) {
+  localStorage.setItem(REACHED_STORAGE_KEY, JSON.stringify(rows));
+}
+
+const fixedCopy = {
+  en: {
+    subject: "Freelance 3D / VFX support",
+    greeting: (company) => `Hello ${company} team,`,
+    body: `I'm a 3D artist, and I help productions on a freelance basis when they need a specific shot covered, or just some extra capacity.
+
+I can take on a full shot, or jump in on just the part of post you're working on, from rotoscope, camera tracking, and matchmove through modeling and animation to compositing, editing, and the final render.
+
+Work samples:
+https://richardandrys.com
+
+If you're on something like this right now, I'm available.
+
+Thank you for your time,
+Richard Andrýs
+rich.andrys@gmail.com`,
+  },
+  cz: {
+    subject: "Externí spolupráce – 3D grafik / VFX",
+    greeting: () => "Dobrý den,",
+    body: `Jsem 3D grafik a produkcím pomáhám externě, když potřebují pokrýt konkrétní záběr nebo jen doplnit kapacitu.
+
+Shot umím převzít celý, stejně tak se můžu zapojit jen do části postprodukce, kterou právě řešíte, od rotoscope, camera trackingu a matchmove přes tvorbu a animaci modelů až po compositing, střih a finální render.
+
+Ukázky mé práce:
+https://richardandrys.com
+
+Pokud právě něco podobného řešíte, jsem k dispozici.
+
+Děkuji za váš čas,
+Richard Andrýs
+rich.andrys@gmail.com`,
+  },
+};
+
+function strengths(contact) {
+  const text = `${contact.focus} ${contact.why_fit}`.toLowerCase();
+  if (text.includes("game") || text.includes("cinematic")) {
+    return { en: "3D animation, cinematics and visual storytelling", cz: "3D animaci, cinematiku a vizuální storytelling" };
+  }
+  if (text.includes("product") || text.includes("industrial") || text.includes("luxury")) {
+    return { en: "product CGI, animation and polished visual design", cz: "produktové CGI, animaci a precizní vizuální design" };
+  }
+  if (text.includes("film") || text.includes("series") || text.includes("television")) {
+    return { en: "film VFX, CGI and post-production", cz: "filmové VFX, CGI a postprodukci" };
+  }
+  if (text.includes("motion") || text.includes("animation")) {
+    return { en: "animation, motion design and CGI", cz: "animaci, motion design a CGI" };
+  }
+  if (text.includes("immersive") || text.includes("virtual production")) {
+    return { en: "CGI, immersive work and virtual production", cz: "CGI, immersive tvorbu a virtuální produkci" };
+  }
+  return { en: "3D, VFX and post-production", cz: "3D, VFX a postprodukci" };
+}
+
+function openingSuggestions(contact, language) {
+  const area = strengths(contact)[language];
+  if (language === "cz") {
+    return [
+      `Narazil jsem na ${contact.company} a zaujal mě způsob, jakým propojujete ${area}.`,
+      `Píšu vám, protože vaše práce v oblasti ${area} je blízko tomu, čemu se věnuji i já.`,
+      `Vaše studio mě zaujalo rozsahem práce v oblasti ${area} a rád bych nabídl externí 3D/VFX podporu.`,
+    ];
+  }
+  return [
+    `I came across ${contact.company} and was struck by how your work brings together ${area}.`,
+    `I'm reaching out because your work across ${area} overlaps closely with the kind of production support I offer.`,
+    `Your studio caught my attention for its work in ${area}, and I'd like to offer freelance 3D/VFX support.`,
+  ];
+}
+
+function defaultLanguage(contact) {
+  return String(contact.outreach_language || "").toLowerCase().startsWith("czech") ? "cz" : "en";
+}
+
+function applyFilters() {
+  const query = state.query.trim().toLowerCase();
+  state.filtered = state.contacts.filter((contact) => {
+    const rank = Number(contact.priority);
+    const priorityMatch =
+      state.priority === "all" ||
+      (state.priority === "5" && rank === 5) ||
+      (state.priority === "4" && rank >= 4);
+    const reached = isReached(contact.company);
+    const reachMatch =
+      state.reachView === "all" ||
+      (state.reachView === "reached" && reached) ||
+      (state.reachView === "open" && !reached);
+    const haystack = `${contact.company} ${contact.country} ${contact.city} ${contact.focus}`.toLowerCase();
+    return priorityMatch && reachMatch && (!query || haystack.includes(query));
+  });
+
+  if (!state.selected || !state.filtered.includes(state.selected)) {
+    state.selected = state.filtered[0] || null;
+  }
+  renderList();
+  renderSelected();
+}
+
+function isReached(company) {
+  return Boolean(state.reached[company]);
+}
+
+function applyReached(payload) {
+  state.reached = Object.fromEntries((payload.reached || []).map((row) => [row.company, row]));
+  updateReachedCount();
+  if (state.contacts.length) applyFilters();
+}
+
+function updateReachedCount() {
+  const reached = Object.keys(state.reached).length;
+  const total = state.contacts.length;
+  elements.reachedCount.textContent = `Reached ${reached} / ${total}`;
+}
+
+function renderList() {
+  elements.list.replaceChildren();
+  elements.count.textContent = String(state.filtered.length);
+  updateReachedCount();
+
+  for (const contact of state.filtered) {
+    const row = elements.template.content.firstElementChild.cloneNode(true);
+    const reached = isReached(contact.company);
+    row.querySelector(".contact-name").textContent = contact.company;
+    row.querySelector(".contact-location").textContent = [contact.city, contact.country].filter(Boolean).join(" · ");
+    row.querySelector(".contact-priority").textContent = contact.priority;
+    row.classList.toggle("is-active", contact === state.selected);
+    row.classList.toggle("is-reached", reached);
+    row.setAttribute("aria-selected", String(contact === state.selected));
+    const checkbox = row.querySelector(".contact-reached");
+    checkbox.checked = reached;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      toggleReached(contact.company, checkbox.checked);
+    });
+    row.querySelector(".contact-select").addEventListener("click", () => selectContact(contact));
+    elements.list.append(row);
+  }
+}
+
+function selectContact(contact) {
+  state.selected = contact;
+  state.language = defaultLanguage(contact);
+  state.openingIndex = 0;
+  state.renderedCompany = "";
+  renderList();
+  renderSelected();
+}
+
+function renderSelected() {
+  const contact = state.selected;
+  const hasContact = Boolean(contact);
+  elements.composer.hidden = !hasContact;
+  elements.empty.hidden = hasContact;
+
+  if (!contact) {
+    state.renderedCompany = "";
+    elements.empty.innerHTML = "<p>No contacts match this filter.</p>";
+    return;
+  }
+
+  elements.companyName.textContent = contact.company;
+  elements.companyLocation.textContent = [contact.city, contact.country].filter(Boolean).join(" · ");
+  elements.companyPriority.textContent = `Priority ${contact.priority}`;
+  elements.companyFocus.textContent = contact.focus;
+  elements.companyEmail.textContent = contact.contact_email || "No public email";
+  elements.companyEmail.href = contact.contact_email ? `mailto:${contact.contact_email}` : "#";
+  elements.companyWebsite.href = contact.website;
+  elements.companySignal.textContent = contact.signal;
+  elements.companyHook.textContent = contact.personalization_hook;
+  elements.companyReached.checked = isReached(contact.company);
+  elements.companyCard.classList.toggle("is-reached", isReached(contact.company));
+  if (state.renderedCompany !== contact.company) {
+    state.renderedCompany = contact.company;
+    renderMessage();
+  }
+}
+
+function renderMessage() {
+  const contact = state.selected;
+  if (!contact) return;
+
+  elements.langCz.classList.toggle("is-active", state.language === "cz");
+  elements.langEn.classList.toggle("is-active", state.language === "en");
+  const suggestions = openingSuggestions(contact, state.language);
+  const selectedOpening = suggestions[state.openingIndex] || suggestions[0];
+
+  elements.openings.replaceChildren();
+  suggestions.forEach((text, index) => {
+    const label = document.createElement("label");
+    label.className = "opening-option";
+    label.classList.toggle("is-active", index === state.openingIndex);
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "opening";
+    radio.checked = index === state.openingIndex;
+    const span = document.createElement("span");
+    span.textContent = text;
+    label.append(radio, span);
+    label.addEventListener("click", () => {
+      state.openingIndex = index;
+      elements.opening.value = text;
+      renderMessage();
+    });
+    elements.openings.append(label);
+  });
+
+  elements.opening.value = selectedOpening;
+  updatePreview();
+}
+
+function fullMessage() {
+  const contact = state.selected;
+  if (!contact) return "";
+  const copy = fixedCopy[state.language];
+  const opening = elements.opening.value.trim();
+  return `${copy.greeting(contact.company)}
+
+${opening}
+
+${copy.body}`;
+}
+
+function currentMessage() {
+  return elements.preview.value;
+}
+
+function updatePreview() {
+  if (!state.selected) return;
+  elements.messageTo.value = state.selected.contact_email || "";
+  elements.messageSubject.value = fixedCopy[state.language].subject;
+  elements.preview.value = fullMessage();
+  updateMeta();
+}
+
+function updateMeta() {
+  const recipient = elements.messageTo.value.trim() || "No email";
+  const subject = elements.messageSubject.value.trim() || "No subject";
+  const sendHint = state.sendConfigured
+    ? `Send as ${state.sendFrom}`
+    : state.fileMode
+      ? "Copy the message — sending needs Open Composer.command on your Mac"
+      : "Log in to send, or copy the message";
+  elements.meta.textContent = `${recipient} · ${subject} · ${sendHint}`;
+  elements.sendMessage.disabled = false;
+  elements.sendMessage.title = state.sendConfigured
+    ? `Send this one email as ${state.sendFrom}`
+    : state.fileMode
+      ? "Copy the message; sending needs the local composer"
+      : "Log in with Gmail to send, or copy the message";
+  updateSessionUI();
+}
+
+function showCopyFeedback(button, message) {
+  const original = button.dataset.originalLabel || button.textContent;
+  button.dataset.originalLabel = original;
+  button.textContent = state.language === "cz" ? "Zkopírováno ✓" : "Copied ✓";
+  elements.copyStatus.textContent = message;
+  window.clearTimeout(copyText.timeout);
+  copyText.timeout = window.setTimeout(() => {
+    button.textContent = original;
+    elements.copyStatus.textContent = "";
+  }, 2200);
+}
+
+async function copyText(text, successMessage, button) {
+  // Give immediate feedback. Clipboard permission prompts can otherwise make
+  // the click look unresponsive while the browser is waiting.
+  showCopyFeedback(button, successMessage);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  }
+}
+
+function changeLanguage(language) {
+  state.language = language;
+  state.openingIndex = 0;
+  renderMessage();
+}
+
+async function sendCurrentEmail() {
+  const contact = state.selected;
+  if (!contact) return;
+  if (state.fileMode || !apiAvailable()) {
+    elements.copyStatus.textContent =
+      "Z tohoto souboru se maily neodesílají. Zkopíruj text, nebo na Macu spusť Open Composer.command.";
+    return;
+  }
+  if (!state.sendConfigured) {
+    showLogin();
+    elements.copyStatus.textContent = "Nejdřív se přihlas Gmailem, nebo zkopíruj mail a pošli ho ručně.";
+    return;
+  }
+  const recipient = elements.messageTo.value.trim();
+  const subject = elements.messageSubject.value.trim();
+  const body = currentMessage().trim();
+  if (!recipient || !subject || !body) {
+    elements.copyStatus.textContent = "Fill in To, Subject, and the email first.";
+    return;
+  }
+  const confirmed = window.confirm(`Send this one email to ${recipient}?`);
+  if (!confirmed) return;
+  elements.sendMessage.disabled = true;
+  try {
+    const response = await fetch("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        company: contact.company,
+        to: recipient,
+        subject,
+        body,
+        confirm: true,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    elements.copyStatus.textContent = `Sent to ${result.to}`;
+    if (result.reached) applyReached(result.reached);
+    else await toggleReached(contact.company, true);
+  } catch (error) {
+    elements.copyStatus.textContent = `Not sent: ${error.message}`;
+  } finally {
+    elements.sendMessage.disabled = false;
+  }
+}
+
+async function toggleReached(company, reached) {
+  if (state.fileMode || !apiAvailable()) {
+    const records = Object.fromEntries(loadLocalReached().map((row) => [row.company, row]));
+    if (reached) {
+      records[company] = records[company] || {
+        company,
+        reached_on: new Date().toISOString().slice(0, 10),
+        source: "manual",
+      };
+    } else {
+      delete records[company];
+    }
+    const rows = Object.values(records);
+    saveLocalReached(rows);
+    applyReached({ reached: rows, count: rows.length, total: state.contacts.length });
+    return;
+  }
+  try {
+    const response = await fetch("/api/reached", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company, reached, source: "manual" }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    applyReached(result);
+  } catch (error) {
+    elements.copyStatus.textContent = `Could not update reached status: ${error.message}`;
+    renderList();
+    renderSelected();
+  }
+}
+
+function applySession(status) {
+  state.sendConfigured = Boolean(status.configured);
+  state.sendFrom = status.from || "";
+  updateSessionUI();
+  updateMeta();
+}
+
+function updateSessionUI() {
+  elements.sessionLabel.textContent = state.sendConfigured ? state.sendFrom : "Not logged in";
+  elements.loginOpen.hidden = state.sendConfigured;
+  elements.logout.hidden = !state.sendConfigured;
+  if (elements.modeBanner) {
+    elements.modeBanner.hidden = !state.fileMode;
+    elements.modeBanner.textContent = "Copy mode — sending needs Open Composer.command on your Mac";
+  }
+  if (state.sendConfigured) {
+    elements.loginOverlay.hidden = true;
+    elements.loginPassword.value = "";
+    elements.loginStatus.textContent = "";
+  }
+}
+
+function showLogin() {
+  elements.loginOverlay.hidden = false;
+  elements.loginStatus.textContent = "";
+  elements.loginStatus.classList.remove("is-error", "is-ok");
+  elements.loginUser.focus();
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const user = elements.loginUser.value.trim();
+  const password = elements.loginPassword.value;
+  elements.loginSubmit.disabled = true;
+  elements.loginStatus.classList.remove("is-error", "is-ok");
+  elements.loginStatus.textContent = "Checking Gmail login…";
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user,
+        password,
+        persist: elements.loginRemember.checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    applySession(result);
+    elements.loginStatus.classList.add("is-ok");
+    elements.loginStatus.textContent = `Logged in as ${result.from}`;
+  } catch (error) {
+    elements.loginStatus.classList.add("is-error");
+    elements.loginStatus.textContent = error.message;
+  } finally {
+    elements.loginSubmit.disabled = false;
+    elements.loginPassword.value = "";
+  }
+}
+
+async function logout() {
+  const response = await fetch("/api/logout", { method: "POST" });
+  const result = response.ok ? await response.json() : { configured: false, from: "" };
+  applySession(result);
+}
+
+async function init() {
+  try {
+    let contacts = [];
+    if (apiAvailable()) {
+      try {
+        const [contactsResponse, statusResponse, reachedResponse] = await Promise.all([
+          fetch("/api/contacts", { cache: "no-store" }),
+          fetch("/api/send-status", { cache: "no-store" }),
+          fetch("/api/reached", { cache: "no-store" }),
+        ]);
+        if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
+        const data = await contactsResponse.json();
+        contacts = data.contacts || [];
+        if (statusResponse.ok) {
+          applySession(await statusResponse.json());
+        }
+        if (reachedResponse.ok) {
+          applyReached(await reachedResponse.json());
+        }
+      } catch (apiError) {
+        if (!window.EMBEDDED_CONTACTS?.contacts?.length) throw apiError;
+        state.fileMode = true;
+        contacts = window.EMBEDDED_CONTACTS.contacts;
+        applyReached({ reached: loadLocalReached() });
+      }
+    } else if (window.EMBEDDED_CONTACTS?.contacts?.length) {
+      state.fileMode = true;
+      contacts = window.EMBEDDED_CONTACTS.contacts;
+      applyReached({ reached: loadLocalReached() });
+    } else {
+      throw new Error("No contact list found.");
+    }
+    if (!contacts.length) throw new Error("Contact list is empty.");
+    state.contacts = contacts;
+    state.filtered = contacts;
+    state.selected = contacts[0] || null;
+    if (state.selected) state.language = defaultLanguage(state.selected);
+    applyFilters();
+    updateSessionUI();
+  } catch (error) {
+    elements.empty.hidden = false;
+    elements.composer.hidden = true;
+    elements.empty.innerHTML = `<p>Could not load contacts: ${error.message}</p>`;
+  }
+}
+
+elements.search.addEventListener("input", (event) => {
+  state.query = event.target.value;
+  applyFilters();
+});
+
+document.querySelectorAll(".filter").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (button.dataset.reach) {
+      state.reachView = state.reachView === button.dataset.reach ? "all" : button.dataset.reach;
+    } else {
+      state.priority = button.dataset.priority;
+    }
+    document.querySelectorAll("[data-priority]").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.priority === state.priority);
+    });
+    document.querySelectorAll("[data-reach]").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.reach === state.reachView);
+    });
+    applyFilters();
+  });
+});
+
+elements.langCz.addEventListener("click", () => changeLanguage("cz"));
+elements.langEn.addEventListener("click", () => changeLanguage("en"));
+elements.opening.addEventListener("input", updatePreview);
+elements.messageTo.addEventListener("input", updateMeta);
+elements.messageSubject.addEventListener("input", updateMeta);
+elements.resetMessage.addEventListener("click", updatePreview);
+elements.copyOpening.addEventListener("click", () =>
+  copyText(
+    elements.opening.value.trim(),
+    state.language === "cz" ? "Úvod zkopírován" : "Opening copied",
+    elements.copyOpening,
+  ),
+);
+elements.copyMessage.addEventListener("click", () =>
+  copyText(
+    currentMessage(),
+    state.language === "cz" ? "Celý e-mail zkopírován" : "Full message copied",
+    elements.copyMessage,
+  ),
+);
+elements.sendMessage.addEventListener("click", sendCurrentEmail);
+elements.companyReached.addEventListener("change", () => {
+  if (state.selected) toggleReached(state.selected.company, elements.companyReached.checked);
+});
+elements.loginOpen.addEventListener("click", showLogin);
+elements.loginSkip.addEventListener("click", () => {
+  elements.loginOverlay.hidden = true;
+});
+elements.loginForm.addEventListener("submit", submitLogin);
+elements.logout.addEventListener("click", logout);
+
+init();
+
+</script>
+</body>
+</html>

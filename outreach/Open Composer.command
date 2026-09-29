@@ -1,18 +1,17 @@
 #!/bin/bash
-# Double-click this file on your Mac. It starts the composer and opens a browser.
+# Double-click on your Mac. Opens the composer in your browser. No server needed.
 cd "$(dirname "$0")"
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 neni nainstalovany."
-  echo "Stahni ho z https://www.python.org/downloads/ a spust tento soubor znovu."
-  if command -v open >/dev/null 2>&1; then
-    open "https://www.python.org/downloads/"
-  fi
+FILE="$(pwd)/composer.html"
+if [ ! -f "$FILE" ]; then
+  echo "Chybi composer.html. Stahni aktualni vetvi cursor/expand-production-contacts-c02a."
   read -r -p "Stiskni Enter pro zavreni..."
   exit 1
 fi
-echo
-echo "Spoustim outreach composer..."
-echo "Prohlizec by se mel otevrit sam. Jinak otevri: http://127.0.0.1:8765"
-echo "Prihlaseni Gmailem neni nutne — maily muzes kopirovat."
-echo
-exec python3 contact_app.py "$@"
+echo "Oteviram composer v prohlizeci..."
+echo "$FILE"
+if command -v open >/dev/null 2>&1; then
+  open "$FILE"
+else
+  echo "Otevri ten soubor rucne v Chrome nebo Safari."
+fi
+sleep 2

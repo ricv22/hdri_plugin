@@ -62,6 +62,26 @@ def write_contacts_js() -> Path:
     return path
 
 
+def write_standalone_html() -> Path:
+    """Write one self-contained HTML file that opens in a browser with no server."""
+    write_contacts_js()
+    html = (ASSETS / "index.html").read_text(encoding="utf-8")
+    css = (ASSETS / "styles.css").read_text(encoding="utf-8")
+    contacts = (ASSETS / "contacts.js").read_text(encoding="utf-8")
+    script = (ASSETS / "app.js").read_text(encoding="utf-8")
+    html = html.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        f"<style>\n{css}\n</style>",
+    )
+    html = html.replace(
+        '  <script src="contacts.js"></script>\n  <script src="app.js" defer></script>',
+        f"<script>\n{contacts}\n</script>\n<script>\n{script}\n</script>",
+    )
+    path = HERE / "composer.html"
+    path.write_text(html, encoding="utf-8")
+    return path
+
+
 def known_companies() -> set[str]:
     return {row["company"].strip() for row in load_contacts() if row.get("company")}
 
@@ -466,7 +486,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     args = parser.parse_args()
-    write_contacts_js()
+    write_standalone_html()
     open_url = f"http://127.0.0.1:{args.port}"
 
     if existing_server_running(args.port):
