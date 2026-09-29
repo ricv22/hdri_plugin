@@ -226,7 +226,22 @@ function updatePreview() {
   elements.meta.textContent = `${state.selected.contact_email || "No email"} · ${fixedCopy[state.language].subject}`;
 }
 
-async function copyText(text, successMessage) {
+function showCopyFeedback(button, message) {
+  const original = button.dataset.originalLabel || button.textContent;
+  button.dataset.originalLabel = original;
+  button.textContent = state.language === "cz" ? "Zkopírováno ✓" : "Copied ✓";
+  elements.copyStatus.textContent = message;
+  window.clearTimeout(copyText.timeout);
+  copyText.timeout = window.setTimeout(() => {
+    button.textContent = original;
+    elements.copyStatus.textContent = "";
+  }, 2200);
+}
+
+async function copyText(text, successMessage, button) {
+  // Give immediate feedback. Clipboard permission prompts can otherwise make
+  // the click look unresponsive while the browser is waiting.
+  showCopyFeedback(button, successMessage);
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -239,11 +254,6 @@ async function copyText(text, successMessage) {
     document.execCommand("copy");
     textarea.remove();
   }
-  elements.copyStatus.textContent = successMessage;
-  window.clearTimeout(copyText.timeout);
-  copyText.timeout = window.setTimeout(() => {
-    elements.copyStatus.textContent = "";
-  }, 2200);
 }
 
 function changeLanguage(language) {
@@ -283,7 +293,19 @@ document.querySelectorAll(".filter").forEach((button) => {
 elements.langCz.addEventListener("click", () => changeLanguage("cz"));
 elements.langEn.addEventListener("click", () => changeLanguage("en"));
 elements.opening.addEventListener("input", updatePreview);
-elements.copyOpening.addEventListener("click", () => copyText(elements.opening.value.trim(), "Opening copied"));
-elements.copyMessage.addEventListener("click", () => copyText(fullMessage(), "Full message copied"));
+elements.copyOpening.addEventListener("click", () =>
+  copyText(
+    elements.opening.value.trim(),
+    state.language === "cz" ? "Úvod zkopírován" : "Opening copied",
+    elements.copyOpening,
+  ),
+);
+elements.copyMessage.addEventListener("click", () =>
+  copyText(
+    fullMessage(),
+    state.language === "cz" ? "Celý e-mail zkopírován" : "Full message copied",
+    elements.copyMessage,
+  ),
+);
 
 init();
