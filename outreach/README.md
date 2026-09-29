@@ -74,18 +74,30 @@ Add **+1** for each true signal (max 5):
 
 ## Contact and message app
 
-Run the local, copy-only composer:
+Run the local composer:
 
 ```bash
 python3 outreach/contact_app.py
 ```
 
 Then open `http://127.0.0.1:8765`. The app reads the latest
-`production_leads.csv` whenever the page loads. It shows the current company
-and research context, suggests three opening lines, switches between Czech and
-English, and copies either the opening or the complete message. The fixed body
-does not change between companies. This app cannot send email or modify the
-contact sheet.
+`production_leads.csv` whenever the page loads. It shows the current company,
+suggests three opening lines, lets you edit the recipient, subject and full
+email, switches between Czech and English, and copies the finished message.
+
+Sending is optional and always one email at a time. Set Gmail credentials in
+the same terminal before starting the app:
+
+```bash
+export SMTP_USER="rich.andrys@gmail.com"
+export SMTP_PASSWORD="your-gmail-app-password"
+python3 outreach/contact_app.py
+```
+
+The Send button stays disabled until those variables are present. Each click
+sends only the currently visible email after a confirmation dialog. Duplicate
+addresses are blocked by `outreach/sent_log.csv`. The spreadsheet is never
+modified.
 
 ## Production email sending
 

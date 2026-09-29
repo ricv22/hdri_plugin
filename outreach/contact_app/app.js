@@ -6,6 +6,8 @@ const state = {
   priority: "all",
   query: "",
   openingIndex: 0,
+  sendConfigured: false,
+  sendFrom: "",
 };
 
 const elements = {
@@ -28,9 +30,13 @@ const elements = {
   langCz: document.querySelector("#lang-cz"),
   langEn: document.querySelector("#lang-en"),
   preview: document.querySelector("#message-preview"),
+  messageTo: document.querySelector("#message-to"),
+  messageSubject: document.querySelector("#message-subject"),
   meta: document.querySelector("#message-meta"),
+  resetMessage: document.querySelector("#reset-message"),
   copyOpening: document.querySelector("#copy-opening"),
   copyMessage: document.querySelector("#copy-message"),
+  sendMessage: document.querySelector("#send-message"),
   copyStatus: document.querySelector("#copy-status"),
 };
 
@@ -220,10 +226,26 @@ ${opening}
 ${copy.body}`;
 }
 
+function currentMessage() {
+  return elements.preview.value;
+}
+
 function updatePreview() {
   if (!state.selected) return;
-  elements.preview.textContent = fullMessage();
-  elements.meta.textContent = `${state.selected.contact_email || "No email"} · ${fixedCopy[state.language].subject}`;
+  elements.messageTo.value = state.selected.contact_email || "";
+  elements.messageSubject.value = fixedCopy[state.language].subject;
+  elements.preview.value = fullMessage();
+  updateMeta();
+}
+
+function updateMeta() {
+  const recipient = elements.messageTo.value.trim() || "No email";
+  const subject = elements.messageSubject.value.trim() || "No subject";
+  const sendHint = state.sendConfigured
+    ? `Send as ${state.sendFrom}`
+    : "Copy only until SMTP_USER and SMTP_PASSWORD are set";
+  elements.meta.textContent = `${recipient} · ${subject} · ${sendHint}`;
+  elements.sendMessage.disabled = !state.sendConfigured;
 }
 
 function showCopyFeedback(button, message) {
@@ -262,17 +284,64 @@ function changeLanguage(language) {
   renderMessage();
 }
 
+async function sendCurrentEmail() {
+  const contact = state.selected;
+  if (!contact) return;
+  const recipient = elements.messageTo.value.trim();
+  const subject = elements.messageSubject.value.trim();
+  const body = currentMessage().trim();
+  if (!recipient || !subject || !body) {
+    elements.copyStatus.textContent = "Fill in To, Subject, and the email first.";
+    return;
+  }
+  const confirmed = window.confirm(`Send this one email to ${recipient}?`);
+  if (!confirmed) return;
+  elements.sendMessage.disabled = true;
+  try {
+    const response = await fetch("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        company: contact.company,
+        to: recipient,
+        subject,
+        body,
+        confirm: true,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    elements.copyStatus.textContent = `Sent to ${result.to}`;
+  } catch (error) {
+    elements.copyStatus.textContent = `Not sent: ${error.message}`;
+  } finally {
+    elements.sendMessage.disabled = !state.sendConfigured;
+  }
+}
+
 async function init() {
   try {
-    const response = await fetch("/api/contacts", { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
+    const [contactsResponse, statusResponse] = await Promise.all([
+      fetch("/api/contacts", { cache: "no-store" }),
+      fetch("/api/send-status", { cache: "no-store" }),
+    ]);
+    if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
+    const data = await contactsResponse.json();
+    if (statusResponse.ok) {
+      const status = await statusResponse.json();
+      state.sendConfigured = Boolean(status.configured);
+      state.sendFrom = status.from || "";
+    }
     state.contacts = data.contacts;
     state.filtered = data.contacts;
     state.selected = data.contacts[0] || null;
     if (state.selected) state.language = defaultLanguage(state.selected);
     applyFilters();
   } catch (error) {
+    elements.empty.hidden = false;
+    elements.composer.hidden = true;
     elements.empty.innerHTML = `<p>Could not load contacts: ${error.message}</p>`;
   }
 }
@@ -293,6 +362,9 @@ document.querySelectorAll(".filter").forEach((button) => {
 elements.langCz.addEventListener("click", () => changeLanguage("cz"));
 elements.langEn.addEventListener("click", () => changeLanguage("en"));
 elements.opening.addEventListener("input", updatePreview);
+elements.messageTo.addEventListener("input", updateMeta);
+elements.messageSubject.addEventListener("input", updateMeta);
+elements.resetMessage.addEventListener("click", updatePreview);
 elements.copyOpening.addEventListener("click", () =>
   copyText(
     elements.opening.value.trim(),
@@ -302,10 +374,11 @@ elements.copyOpening.addEventListener("click", () =>
 );
 elements.copyMessage.addEventListener("click", () =>
   copyText(
-    fullMessage(),
+    currentMessage(),
     state.language === "cz" ? "Celý e-mail zkopírován" : "Full message copied",
     elements.copyMessage,
   ),
 );
+elements.sendMessage.addEventListener("click", sendCurrentEmail);
 
 init();

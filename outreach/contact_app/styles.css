@@ -404,7 +404,52 @@ dd a { text-decoration-color: var(--acid); }
   font-size: 0.72rem;
 }
 
-.copy-actions { display: flex; gap: 8px; }
+.copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.email-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1.3fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.email-fields label,
+.message-editor {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.email-fields input,
+.message-preview {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background: #09090d;
+  font-size: 0.86rem;
+}
+
+.email-fields input:focus,
+.message-preview:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: none;
+}
 
 .secondary,
 .primary {
@@ -425,16 +470,12 @@ dd a { text-decoration-color: var(--acid); }
 
 .message-preview {
   min-height: 360px;
-  margin: 16px 0 0;
-  padding: 18px;
+  margin: 0;
+  resize: vertical;
   overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
   white-space: pre-wrap;
   color: #d9d9df;
-  background: #09090d;
   font-family: inherit;
-  font-size: 0.82rem;
   line-height: 1.62;
 }
 
@@ -476,4 +517,5 @@ dd a { text-decoration-color: var(--acid); }
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+  .email-fields { grid-template-columns: 1fr; }
 }

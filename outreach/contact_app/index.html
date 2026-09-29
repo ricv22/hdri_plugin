@@ -14,7 +14,7 @@
       <p class="eyebrow">Production outreach</p>
       <h1>Message composer</h1>
     </div>
-    <p class="safe-mode"><span></span>Copy only · no sending</p>
+    <p class="safe-mode"><span></span>Edit, copy, or send one email</p>
   </header>
 
   <main>
@@ -97,16 +97,31 @@
 
           <div class="preview-heading">
             <div>
-              <p class="eyebrow">Full email</p>
+              <p class="eyebrow">Full email — editable</p>
               <p id="message-meta" class="message-meta"></p>
             </div>
             <div class="copy-actions">
+              <button id="reset-message" class="secondary" type="button">Reset from opening</button>
               <button id="copy-opening" class="secondary" type="button">Copy opening</button>
-              <button id="copy-message" class="primary" type="button">Copy full message</button>
+              <button id="copy-message" class="secondary" type="button">Copy full message</button>
+              <button id="send-message" class="primary" type="button">Send this email</button>
             </div>
           </div>
 
-          <pre id="message-preview" class="message-preview"></pre>
+          <div class="email-fields">
+            <label>
+              <span>To</span>
+              <input id="message-to" type="email" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>Subject</span>
+              <input id="message-subject" type="text" autocomplete="off">
+            </label>
+          </div>
+          <label class="message-editor">
+            <span class="sr-only">Email body</span>
+            <textarea id="message-preview" class="message-preview" rows="18"></textarea>
+          </label>
           <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
         </section>
       </div>
