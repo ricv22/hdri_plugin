@@ -15,7 +15,9 @@ import os
 import re
 import smtplib
 import ssl
+import sys
 import threading
+import webbrowser
 from datetime import date
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,13 +35,16 @@ ASSETS = HERE / "contact_app"
 REACHED_FIELDS = ["company", "reached_on", "source"]
 CREDENTIALS_FILE = HERE / ".smtp.json"
 CREDENTIALS_LOCK = threading.Lock()
+REACHED_LOCK = threading.Lock()
 SESSION_CREDENTIALS: dict[str, str] = {}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SEND_BYTES = 80_000
 ASSET_TYPES = {
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/contacts.js": ("contacts.js", "text/javascript; charset=utf-8"),
 }
 
 
@@ -47,6 +52,14 @@ def load_contacts() -> list[dict[str, str]]:
     """Return the current CSV contents without caching them."""
     with CONTACTS.open(newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(handle))
+
+
+def write_contacts_js() -> Path:
+    """Snapshot contacts so the HTML file can open without a running server."""
+    payload = json.dumps({"contacts": load_contacts()}, ensure_ascii=False)
+    path = ASSETS / "contacts.js"
+    path.write_text(f"window.EMBEDDED_CONTACTS = {payload};\n", encoding="utf-8")
+    return path
 
 
 def known_companies() -> set[str]:
@@ -134,7 +147,10 @@ def load_saved_credentials() -> dict[str, str]:
     password = str(data.get("password", "")).strip()
     if not user or not password:
         return {}
-    return {"user": user, "password": password}
+    saved = {"user": user, "password": password}
+    if data.get("port"):
+        saved["port"] = str(data.get("port"))
+    return saved
 
 
 def current_credentials() -> dict[str, str]:
@@ -147,15 +163,17 @@ def current_credentials() -> dict[str, str]:
         return dict(saved)
 
 
-def save_credentials(user: str, password: str, persist: bool) -> None:
+def save_credentials(user: str, password: str, persist: bool, port: int | None = None) -> None:
     with CREDENTIALS_LOCK:
         SESSION_CREDENTIALS["user"] = user
         SESSION_CREDENTIALS["password"] = password
+        if port:
+            SESSION_CREDENTIALS["port"] = str(port)
         if persist:
-            CREDENTIALS_FILE.write_text(
-                json.dumps({"user": user, "password": password}),
-                encoding="utf-8",
-            )
+            payload = {"user": user, "password": password}
+            if port:
+                payload["port"] = port
+            CREDENTIALS_FILE.write_text(json.dumps(payload), encoding="utf-8")
             CREDENTIALS_FILE.chmod(0o600)
         elif CREDENTIALS_FILE.exists():
             CREDENTIALS_FILE.unlink()
@@ -183,11 +201,39 @@ def smtp_settings() -> tuple[str, int, str, str, str]:
     if not user or not password:
         raise RuntimeError("Log in with your Gmail address and App Password first.")
     host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    stored_port = stored.get("port")
+    port = int(stored_port or os.environ.get("SMTP_PORT", "587"))
     return host, port, user, password, sender or user
 
 
-def verify_smtp(user: str, password: str) -> None:
+def smtp_send(host: str, port: int, user: str, password: str, message: object) -> int:
+    """Send one message, falling back to Gmail SSL 465 if STARTTLS 587 drops."""
+    context = ssl.create_default_context()
+    if port == 465:
+        with smtplib.SMTP_SSL(host, 465, context=context, timeout=30) as server:
+            server.ehlo()
+            server.login(user, password)
+            server.send_message(message)
+        return 465
+    try:
+        with smtplib.SMTP(host, port, timeout=30) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(user, password)
+            server.send_message(message)
+        return port
+    except smtplib.SMTPAuthenticationError:
+        raise
+    except (smtplib.SMTPException, OSError, TimeoutError):
+        with smtplib.SMTP_SSL(host, 465, context=context, timeout=30) as server:
+            server.ehlo()
+            server.login(user, password)
+            server.send_message(message)
+        return 465
+
+
+def verify_smtp(user: str, password: str) -> int:
     host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     port = int(os.environ.get("SMTP_PORT", "587"))
     context = ssl.create_default_context()
@@ -197,13 +243,14 @@ def verify_smtp(user: str, password: str) -> None:
             server.starttls(context=context)
             server.ehlo()
             server.login(user, password)
-            return
+            return port
     except smtplib.SMTPAuthenticationError:
         raise
     except (smtplib.SMTPException, OSError, TimeoutError):
         with smtplib.SMTP_SSL(host, 465, context=context, timeout=20) as server:
             server.ehlo()
             server.login(user, password)
+        return 465
 
 
 def login(user: str, password: str, persist: bool) -> dict[str, object]:
@@ -214,7 +261,7 @@ def login(user: str, password: str, persist: bool) -> dict[str, object]:
     if len(password) < 8:
         raise ValueError("Enter a Gmail App Password. Google shows it as 16 characters.")
     try:
-        verify_smtp(user, password)
+        port = verify_smtp(user, password)
     except smtplib.SMTPAuthenticationError as exc:
         raise ValueError(
             "Gmail rejected the login. Use an App Password from myaccount.google.com/apppasswords, not your normal password."
@@ -225,9 +272,9 @@ def login(user: str, password: str, persist: bool) -> dict[str, object]:
         ) from exc
     except (smtplib.SMTPException, OSError, TimeoutError) as exc:
         raise ValueError(
-            "Could not finish the Gmail login from this computer. Run `python3 outreach/contact_app.py` on your Mac and log in there — Gmail often blocks cloud servers."
+            "Could not finish the Gmail login from this computer. Double-click Open Composer.command on your Mac and log in there — Gmail often blocks cloud servers."
         ) from exc
-    save_credentials(user, password, persist)
+    save_credentials(user, password, persist, port=port)
     return smtp_ready()
 
 
@@ -263,13 +310,7 @@ def send_one_email(payload: dict[str, object]) -> dict[str, str]:
         {"to": recipient, "subject": subject, "body": body + "\n", "attachment": ""},
         sender,
     )
-    context = ssl.create_default_context()
-    with smtplib.SMTP(host, port, timeout=30) as server:
-        server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
-        server.login(user, password)
-        server.send_message(message)
+    smtp_send(host, port, user, password, message)
     mailer.append_sent(recipient, company, subject)
     reached = set_reached(company, True, source="sent")
     return {"to": recipient, "from": sender, "subject": subject, "reached": reached}
@@ -328,13 +369,16 @@ class ContactAppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
                 return
             result = send_one_email(payload)
-        except (json.JSONDecodeError, ValueError, RuntimeError, smtplib.SMTPException, OSError) as exc:
+        except (json.JSONDecodeError, ValueError, RuntimeError, smtplib.SMTPException, OSError, KeyError) as exc:
             status = HTTPStatus.BAD_REQUEST
             if isinstance(exc, RuntimeError) and "Log in" in str(exc):
                 status = HTTPStatus.UNAUTHORIZED
             elif isinstance(exc, smtplib.SMTPAuthenticationError):
                 status = HTTPStatus.UNAUTHORIZED
             self.send_json({"ok": False, "error": str(exc)}, status)
+            return
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self.send_json({"ok": True, **result})
 
@@ -384,30 +428,67 @@ def existing_server_running(port: int) -> bool:
         return False
 
 
+def announce_ready(url: str, already: bool = False, open_browser: bool = True) -> None:
+    print()
+    print("=" * 56)
+    if already:
+        print("Composer is already running. This is not an error.")
+    else:
+        print("Composer is running.")
+    print(f"Open this in your browser:\n  {url}")
+    print("=" * 56)
+    print()
+    if open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+
+def bind_server(host: str, preferred_port: int) -> tuple[ReusableComposerServer, int]:
+    last_error: OSError | None = None
+    for port in range(preferred_port, preferred_port + 20):
+        if existing_server_running(port):
+            continue
+        try:
+            return ReusableComposerServer((host, port), ContactAppHandler), port
+        except OSError as exc:
+            last_error = exc
+            continue
+    message = f"Could not start the composer on ports {preferred_port}-{preferred_port + 19}: {last_error}"
+    print(message)
+    raise SystemExit(1) from last_error
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     args = parser.parse_args()
+    write_contacts_js()
     open_url = f"http://127.0.0.1:{args.port}"
 
     if existing_server_running(args.port):
-        print(f"Composer is already running. Open {open_url}")
+        announce_ready(open_url, already=True, open_browser=not args.no_browser)
+        if sys.stdin.isatty():
+            try:
+                input("Press Enter to close this window. The composer keeps running.\n")
+            except EOFError:
+                pass
         return
 
     try:
-        server = ReusableComposerServer((args.host, args.port), ContactAppHandler)
-    except OSError as exc:
+        server, port = bind_server(args.host, args.port)
+    except SystemExit:
         if existing_server_running(args.port):
-            print(f"Composer is already running. Open {open_url}")
+            announce_ready(open_url, already=True, open_browser=not args.no_browser)
             return
-        print(f"Could not start the composer on port {args.port}: {exc}")
-        print("Stop the other process using that port, or run: python3 outreach/contact_app.py --port 8766")
-        raise SystemExit(1) from exc
-
-    print(f"Outreach composer: {open_url}")
+        raise
+    open_url = f"http://127.0.0.1:{port}"
     print(f"Reading contacts from: {CONTACTS}")
     print("Press Ctrl+C to stop.")
+    announce_ready(open_url, already=False, open_browser=not args.no_browser)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

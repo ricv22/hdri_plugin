@@ -5,16 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Outreach Composer — Richard Andrýs</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/">RA<span>*</span></a>
+    <a class="brand" href="index.html">RA<span>*</span></a>
     <div>
       <p class="eyebrow">Production outreach</p>
       <h1>Message composer</h1>
     </div>
     <p id="reached-count" class="reached-count">Reached 0 / 0</p>
+    <p id="mode-banner" class="mode-banner" hidden>Copy mode</p>
     <div class="session-box">
       <span id="session-label">Not logged in</span>
       <button id="login-open" class="secondary" type="button">Log in</button>
@@ -157,7 +158,7 @@
     <form id="login-form" class="login-card">
       <p class="eyebrow">Gmail login</p>
       <h2>Send from your account</h2>
-      <p class="login-copy">Use a Google App Password from <strong>myaccount.google.com/apppasswords</strong>, not your normal Gmail password. Spaces in the password are OK. If Gmail blocks this cloud computer, click Continue without sending and run the app on your Mac.</p>
+      <p id="login-copy" class="login-copy">Můžeš skládat a kopírovat maily bez přihlášení. Odesílání z appky potřebuje Gmail App Password z <strong>myaccount.google.com/apppasswords</strong>, ne běžné heslo. Spouštěj to na Macu (Open Composer.command) — Gmail cloud často blokuje.</p>
       <label>
         <span>Email</span>
         <input id="login-user" type="email" autocomplete="username" spellcheck="false" value="rich.andrys@gmail.com">
@@ -173,11 +174,12 @@
       <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
       <div class="login-actions">
         <button id="login-submit" class="primary" type="submit">Log in</button>
-        <button id="login-skip" class="secondary" type="button">Continue without sending</button>
+        <button id="login-skip" class="secondary" type="button">Pokračovat bez odesílání</button>
       </div>
     </form>
   </div>
 
-  <script src="/app.js" defer></script>
+  <script src="contacts.js"></script>
+  <script src="app.js" defer></script>
 </body>
 </html>

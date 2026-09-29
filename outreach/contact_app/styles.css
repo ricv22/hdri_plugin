@@ -52,7 +52,7 @@ a { color: inherit; }
 .topbar {
   min-height: 92px;
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: 20px;
   padding: 18px 28px;
@@ -88,6 +88,17 @@ h1 {
 h2 {
   margin-bottom: 0;
   font-size: 1.25rem;
+}
+
+.mode-banner {
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(216, 255, 0, 0.35);
+  border-radius: 999px;
+  color: var(--acid);
+  background: var(--acid-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .reached-count {

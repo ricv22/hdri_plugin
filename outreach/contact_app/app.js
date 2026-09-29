@@ -11,6 +11,7 @@ const state = {
   reached: {},
   reachView: "all",
   renderedCompany: "",
+  fileMode: false,
 };
 
 const elements = {
@@ -55,7 +56,27 @@ const elements = {
   loginStatus: document.querySelector("#login-status"),
   loginSkip: document.querySelector("#login-skip"),
   loginSubmit: document.querySelector("#login-submit"),
+  modeBanner: document.querySelector("#mode-banner"),
 };
+
+const REACHED_STORAGE_KEY = "outreach-reached";
+
+function apiAvailable() {
+  return location.protocol === "http:" || location.protocol === "https:";
+}
+
+function loadLocalReached() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(REACHED_STORAGE_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalReached(rows) {
+  localStorage.setItem(REACHED_STORAGE_KEY, JSON.stringify(rows));
+}
 
 const fixedCopy = {
   en: {
@@ -129,7 +150,7 @@ function openingSuggestions(contact, language) {
 }
 
 function defaultLanguage(contact) {
-  return contact.outreach_language.toLowerCase().startsWith("czech") ? "cz" : "en";
+  return String(contact.outreach_language || "").toLowerCase().startsWith("czech") ? "cz" : "en";
 }
 
 function applyFilters() {
@@ -297,12 +318,16 @@ function updateMeta() {
   const subject = elements.messageSubject.value.trim() || "No subject";
   const sendHint = state.sendConfigured
     ? `Send as ${state.sendFrom}`
-    : "Log in to send, or copy the message";
+    : state.fileMode
+      ? "Copy the message — sending needs Open Composer.command on your Mac"
+      : "Log in to send, or copy the message";
   elements.meta.textContent = `${recipient} · ${subject} · ${sendHint}`;
-  elements.sendMessage.disabled = !state.sendConfigured;
+  elements.sendMessage.disabled = false;
   elements.sendMessage.title = state.sendConfigured
     ? `Send this one email as ${state.sendFrom}`
-    : "Log in with Gmail to send";
+    : state.fileMode
+      ? "Copy the message; sending needs the local composer"
+      : "Log in with Gmail to send, or copy the message";
   updateSessionUI();
 }
 
@@ -345,6 +370,16 @@ function changeLanguage(language) {
 async function sendCurrentEmail() {
   const contact = state.selected;
   if (!contact) return;
+  if (state.fileMode || !apiAvailable()) {
+    elements.copyStatus.textContent =
+      "Z tohoto souboru se maily neodesílají. Zkopíruj text, nebo na Macu spusť Open Composer.command.";
+    return;
+  }
+  if (!state.sendConfigured) {
+    showLogin();
+    elements.copyStatus.textContent = "Nejdřív se přihlas Gmailem, nebo zkopíruj mail a pošli ho ručně.";
+    return;
+  }
   const recipient = elements.messageTo.value.trim();
   const subject = elements.messageSubject.value.trim();
   const body = currentMessage().trim();
@@ -377,11 +412,27 @@ async function sendCurrentEmail() {
   } catch (error) {
     elements.copyStatus.textContent = `Not sent: ${error.message}`;
   } finally {
-    elements.sendMessage.disabled = !state.sendConfigured;
+    elements.sendMessage.disabled = false;
   }
 }
 
 async function toggleReached(company, reached) {
+  if (state.fileMode || !apiAvailable()) {
+    const records = Object.fromEntries(loadLocalReached().map((row) => [row.company, row]));
+    if (reached) {
+      records[company] = records[company] || {
+        company,
+        reached_on: new Date().toISOString().slice(0, 10),
+        source: "manual",
+      };
+    } else {
+      delete records[company];
+    }
+    const rows = Object.values(records);
+    saveLocalReached(rows);
+    applyReached({ reached: rows, count: rows.length, total: state.contacts.length });
+    return;
+  }
   try {
     const response = await fetch("/api/reached", {
       method: "POST",
@@ -409,6 +460,10 @@ function updateSessionUI() {
   elements.sessionLabel.textContent = state.sendConfigured ? state.sendFrom : "Not logged in";
   elements.loginOpen.hidden = state.sendConfigured;
   elements.logout.hidden = !state.sendConfigured;
+  if (elements.modeBanner) {
+    elements.modeBanner.hidden = !state.fileMode;
+    elements.modeBanner.textContent = "Copy mode — sending needs Open Composer.command on your Mac";
+  }
   if (state.sendConfigured) {
     elements.loginOverlay.hidden = true;
     elements.loginPassword.value = "";
@@ -462,25 +517,43 @@ async function logout() {
 
 async function init() {
   try {
-    const [contactsResponse, statusResponse, reachedResponse] = await Promise.all([
-      fetch("/api/contacts", { cache: "no-store" }),
-      fetch("/api/send-status", { cache: "no-store" }),
-      fetch("/api/reached", { cache: "no-store" }),
-    ]);
-    if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
-    const data = await contactsResponse.json();
-    if (statusResponse.ok) {
-      applySession(await statusResponse.json());
+    let contacts = [];
+    if (apiAvailable()) {
+      try {
+        const [contactsResponse, statusResponse, reachedResponse] = await Promise.all([
+          fetch("/api/contacts", { cache: "no-store" }),
+          fetch("/api/send-status", { cache: "no-store" }),
+          fetch("/api/reached", { cache: "no-store" }),
+        ]);
+        if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
+        const data = await contactsResponse.json();
+        contacts = data.contacts || [];
+        if (statusResponse.ok) {
+          applySession(await statusResponse.json());
+        }
+        if (reachedResponse.ok) {
+          applyReached(await reachedResponse.json());
+        }
+      } catch (apiError) {
+        if (!window.EMBEDDED_CONTACTS?.contacts?.length) throw apiError;
+        state.fileMode = true;
+        contacts = window.EMBEDDED_CONTACTS.contacts;
+        applyReached({ reached: loadLocalReached() });
+      }
+    } else if (window.EMBEDDED_CONTACTS?.contacts?.length) {
+      state.fileMode = true;
+      contacts = window.EMBEDDED_CONTACTS.contacts;
+      applyReached({ reached: loadLocalReached() });
+    } else {
+      throw new Error("No contact list found.");
     }
-    if (reachedResponse.ok) {
-      applyReached(await reachedResponse.json());
-    }
-    state.contacts = data.contacts;
-    state.filtered = data.contacts;
-    state.selected = data.contacts[0] || null;
+    if (!contacts.length) throw new Error("Contact list is empty.");
+    state.contacts = contacts;
+    state.filtered = contacts;
+    state.selected = contacts[0] || null;
     if (state.selected) state.language = defaultLanguage(state.selected);
     applyFilters();
-    if (!state.sendConfigured) elements.loginOverlay.hidden = false;
+    updateSessionUI();
   } catch (error) {
     elements.empty.hidden = false;
     elements.composer.hidden = true;

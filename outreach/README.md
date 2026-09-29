@@ -74,19 +74,23 @@ Add **+1** for each true signal (max 5):
 
 ## Contact and message app
 
-Run the local composer:
+Na Macu je nejjednodušší **dvojklik na** [`Open Composer.command`](./Open%20Composer.command)
+ve složce `outreach`. Otev?e se Terminal i prohlíže? na `http://127.0.0.1:8765`.
+P?ihlášení Gmailem není pot?eba — maily m?žeš skládat a kopírovat hned.
+Odesílání z appky funguje až po p?ihlášení **na Macu** (Gmail cloud servery ?asto blokuje).
+
+Bez serveru jde otev?ít i [`contact_app/index.html`](./contact_app/index.html) v prohlíže?i
+(kopírování mail?, bez odesílání).
+
+Z Terminálu:
 
 ```bash
 python3 outreach/contact_app.py
 ```
 
-Then open `http://127.0.0.1:8765`. If that port is already in use, the command
-prints that the composer is already running instead of crashing. To use another
-port:
-
-```bash
-python3 outreach/contact_app.py --port 8766
-```
+Pak otev?i `http://127.0.0.1:8765`. Když je port obsazený *touto* appkou, p?íkaz
+to ?ekne a prohlíže? otev?e znovu — není to chyba. Když je obsazený n??ím jiným,
+appka sama vezme další volný port (8766, 8767, …) a vypíše URL.
 
 The app reads the latest `production_leads.csv` whenever the page loads. It shows the current company,
 suggests three opening lines, lets you edit the recipient, subject and full
