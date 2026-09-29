@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Outreach Composer — Richard Andrýs</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">RA<span>*</span></a>
+    <div>
+      <p class="eyebrow">Production outreach</p>
+      <h1>Message composer</h1>
+    </div>
+    <p class="safe-mode"><span></span>Copy only · no sending</p>
+  </header>
+
+  <main>
+    <aside class="contacts-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Contact sheet</p>
+          <h2>Studios</h2>
+        </div>
+        <span id="contact-count" class="count">—</span>
+      </div>
+
+      <label class="search">
+        <span class="sr-only">Search contacts</span>
+        <input id="search" type="search" placeholder="Search company or country…" autocomplete="off">
+      </label>
+
+      <div class="filters" aria-label="Priority filter">
+        <button class="filter is-active" type="button" data-priority="all">All</button>
+        <button class="filter" type="button" data-priority="5">Priority 5</button>
+        <button class="filter" type="button" data-priority="4">4+</button>
+      </div>
+
+      <div id="contact-list" class="contact-list" role="listbox" aria-label="Production contacts"></div>
+    </aside>
+
+    <section class="workspace">
+      <div id="empty-state" class="empty-state">
+        <p>Loading contacts…</p>
+      </div>
+
+      <div id="composer" class="composer" hidden>
+        <section class="company-card">
+          <div class="company-title">
+            <div>
+              <p id="company-location" class="eyebrow"></p>
+              <h2 id="company-name"></h2>
+            </div>
+            <span id="company-priority" class="priority"></span>
+          </div>
+          <p id="company-focus" class="focus"></p>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd><a id="company-email"></a></dd>
+            </div>
+            <div>
+              <dt>Website</dt>
+              <dd><a id="company-website" target="_blank" rel="noreferrer">Open site ↗</a></dd>
+            </div>
+            <div>
+              <dt>Current signal</dt>
+              <dd id="company-signal"></dd>
+            </div>
+            <div>
+              <dt>Research note</dt>
+              <dd id="company-hook"></dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="message-card">
+          <div class="message-heading">
+            <div>
+              <p class="eyebrow">Compose</p>
+              <h2>Choose an opening</h2>
+            </div>
+            <div class="language-switch" aria-label="Message language">
+              <button id="lang-cz" type="button" data-language="cz">CZ</button>
+              <button id="lang-en" type="button" data-language="en">EN</button>
+            </div>
+          </div>
+
+          <div id="opening-options" class="opening-options"></div>
+
+          <label class="opening-editor">
+            <span>Your opening — editable</span>
+            <textarea id="opening" rows="3"></textarea>
+          </label>
+
+          <div class="preview-heading">
+            <div>
+              <p class="eyebrow">Full email</p>
+              <p id="message-meta" class="message-meta"></p>
+            </div>
+            <div class="copy-actions">
+              <button id="copy-opening" class="secondary" type="button">Copy opening</button>
+              <button id="copy-message" class="primary" type="button">Copy full message</button>
+            </div>
+          </div>
+
+          <pre id="message-preview" class="message-preview"></pre>
+          <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <template id="contact-template">
+    <button class="contact-row" type="button" role="option">
+      <span>
+        <strong class="contact-name"></strong>
+        <small class="contact-location"></small>
+      </span>
+      <span class="contact-priority"></span>
+    </button>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

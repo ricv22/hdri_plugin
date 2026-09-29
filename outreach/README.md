@@ -69,11 +69,27 @@ Add **+1** for each true signal (max 5):
 - [`production_leads.csv`](./production_leads.csv) — production and VFX studio contacts
 - [`messages.md`](./messages.md) — Czech templates + follow-ups
 - [`sprint.md`](./sprint.md) — first outreach batch queue & tracking
+- [`contact_app.py`](./contact_app.py) — local contact browser and message composer
 - [`send_production_emails.py`](./send_production_emails.py) — draft, approve, and send production emails
+
+## Contact and message app
+
+Run the local, copy-only composer:
+
+```bash
+python3 outreach/contact_app.py
+```
+
+Then open `http://127.0.0.1:8765`. The app reads the latest
+`production_leads.csv` whenever the page loads. It shows the current company
+and research context, suggests three opening lines, switches between Czech and
+English, and copies either the opening or the complete message. The fixed body
+does not change between companies. This app cannot send email or modify the
+contact sheet.
 
 ## Production email sending
 
-The mailer reads `production_leads.csv`, writes one editable draft per studio, and sends only drafts you have marked `Approved: yes`. It will not send the same address twice. One run sends at most 20 messages, with a pause between them.
+The optional mailer reads `production_leads.csv`, writes one editable draft per studio, and sends only drafts you have marked `Approved: yes`. It will not send the same address twice. One run sends at most 20 messages, with a pause between them. It does not attach a CV.
 
 Gmail needs an App Password, not your normal password:
 

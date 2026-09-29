@@ -29,7 +29,6 @@ ROOT = Path(__file__).resolve().parents[1]
 LEADS = ROOT / "outreach" / "production_leads.csv"
 DRAFTS = ROOT / "outreach" / "drafts"
 SENT_LOG = ROOT / "outreach" / "sent_log.csv"
-DEFAULT_CV = ROOT / "outreach" / "Richard_Andrys_CV_EN-5.pdf"
 MAX_PER_RUN = 20
 
 CSV_FIELDS = [
@@ -123,13 +122,12 @@ def draft_path(row: dict[str, str]) -> Path:
 
 def render_draft(row: dict[str, str], approved: str = "no") -> str:
     subject, body = subject_and_body(row)
-    attachment = DEFAULT_CV.relative_to(ROOT).as_posix() if DEFAULT_CV.exists() else ""
     note = row["personalization_hook"].replace("\n", " ").strip()
     return (
         f"To: {row['contact_email'].strip()}\n"
         f"Subject: {subject}\n"
         f"Approved: {approved}\n"
-        f"Attachment: {attachment}\n"
+        "Attachment:\n"
         f"Note: {note}\n"
         "\n"
         "---\n"
