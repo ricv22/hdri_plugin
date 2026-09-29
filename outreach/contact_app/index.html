@@ -15,7 +15,11 @@
       <h1>Message composer</h1>
     </div>
     <p id="reached-count" class="reached-count">Reached 0 / 0</p>
-    <p class="safe-mode"><span></span>Edit, copy, or send one email</p>
+    <div class="session-box">
+      <span id="session-label">Not logged in</span>
+      <button id="login-open" class="secondary" type="button">Log in</button>
+      <button id="logout" class="secondary" type="button" hidden>Log out</button>
+    </div>
   </header>
 
   <main>
@@ -148,6 +152,31 @@
       <span class="contact-priority"></span>
     </div>
   </template>
+
+  <div id="login-overlay" class="login-overlay" hidden>
+    <form id="login-form" class="login-card">
+      <p class="eyebrow">Gmail login</p>
+      <h2>Send from your account</h2>
+      <p class="login-copy">Use a Google App Password, not your normal Gmail password. The app checks the login with Gmail before it can send.</p>
+      <label>
+        <span>Email</span>
+        <input id="login-user" type="email" autocomplete="username" spellcheck="false" value="rich.andrys@gmail.com">
+      </label>
+      <label>
+        <span>App Password</span>
+        <input id="login-password" type="password" autocomplete="current-password">
+      </label>
+      <label class="remember">
+        <input id="login-remember" type="checkbox" checked>
+        <span>Remember on this computer</span>
+      </label>
+      <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
+      <div class="login-actions">
+        <button id="login-submit" class="primary" type="submit">Log in</button>
+        <button id="login-skip" class="secondary" type="button">Continue without sending</button>
+      </div>
+    </form>
+  </div>
 
   <script src="/app.js" defer></script>
 </body>

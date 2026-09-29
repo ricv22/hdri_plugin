@@ -44,6 +44,17 @@ const elements = {
   reachedCount: document.querySelector("#reached-count"),
   companyReached: document.querySelector("#company-reached"),
   companyCard: document.querySelector(".company-card"),
+  sessionLabel: document.querySelector("#session-label"),
+  loginOpen: document.querySelector("#login-open"),
+  logout: document.querySelector("#logout"),
+  loginOverlay: document.querySelector("#login-overlay"),
+  loginForm: document.querySelector("#login-form"),
+  loginUser: document.querySelector("#login-user"),
+  loginPassword: document.querySelector("#login-password"),
+  loginRemember: document.querySelector("#login-remember"),
+  loginStatus: document.querySelector("#login-status"),
+  loginSkip: document.querySelector("#login-skip"),
+  loginSubmit: document.querySelector("#login-submit"),
 };
 
 const fixedCopy = {
@@ -286,12 +297,13 @@ function updateMeta() {
   const subject = elements.messageSubject.value.trim() || "No subject";
   const sendHint = state.sendConfigured
     ? `Send as ${state.sendFrom}`
-    : "Copy only until SMTP_USER and SMTP_PASSWORD are set";
+    : "Log in to send, or copy the message";
   elements.meta.textContent = `${recipient} · ${subject} · ${sendHint}`;
   elements.sendMessage.disabled = !state.sendConfigured;
   elements.sendMessage.title = state.sendConfigured
     ? `Send this one email as ${state.sendFrom}`
-    : "Set SMTP_USER and SMTP_PASSWORD before sending";
+    : "Log in with Gmail to send";
+  updateSessionUI();
 }
 
 function showCopyFeedback(button, message) {
@@ -386,6 +398,68 @@ async function toggleReached(company, reached) {
   }
 }
 
+function applySession(status) {
+  state.sendConfigured = Boolean(status.configured);
+  state.sendFrom = status.from || "";
+  updateSessionUI();
+  updateMeta();
+}
+
+function updateSessionUI() {
+  elements.sessionLabel.textContent = state.sendConfigured ? state.sendFrom : "Not logged in";
+  elements.loginOpen.hidden = state.sendConfigured;
+  elements.logout.hidden = !state.sendConfigured;
+  if (state.sendConfigured) {
+    elements.loginOverlay.hidden = true;
+    elements.loginPassword.value = "";
+    elements.loginStatus.textContent = "";
+  }
+}
+
+function showLogin() {
+  elements.loginOverlay.hidden = false;
+  elements.loginStatus.textContent = "";
+  elements.loginStatus.classList.remove("is-error", "is-ok");
+  elements.loginUser.focus();
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const user = elements.loginUser.value.trim();
+  const password = elements.loginPassword.value;
+  elements.loginSubmit.disabled = true;
+  elements.loginStatus.classList.remove("is-error", "is-ok");
+  elements.loginStatus.textContent = "Checking Gmail login…";
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user,
+        password,
+        persist: elements.loginRemember.checked,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    applySession(result);
+    elements.loginStatus.classList.add("is-ok");
+    elements.loginStatus.textContent = `Logged in as ${result.from}`;
+  } catch (error) {
+    elements.loginStatus.classList.add("is-error");
+    elements.loginStatus.textContent = error.message;
+  } finally {
+    elements.loginSubmit.disabled = false;
+    elements.loginPassword.value = "";
+  }
+}
+
+async function logout() {
+  const response = await fetch("/api/logout", { method: "POST" });
+  const result = response.ok ? await response.json() : { configured: false, from: "" };
+  applySession(result);
+}
+
 async function init() {
   try {
     const [contactsResponse, statusResponse, reachedResponse] = await Promise.all([
@@ -396,9 +470,7 @@ async function init() {
     if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
     const data = await contactsResponse.json();
     if (statusResponse.ok) {
-      const status = await statusResponse.json();
-      state.sendConfigured = Boolean(status.configured);
-      state.sendFrom = status.from || "";
+      applySession(await statusResponse.json());
     }
     if (reachedResponse.ok) {
       applyReached(await reachedResponse.json());
@@ -408,6 +480,7 @@ async function init() {
     state.selected = data.contacts[0] || null;
     if (state.selected) state.language = defaultLanguage(state.selected);
     applyFilters();
+    if (!state.sendConfigured) elements.loginOverlay.hidden = false;
   } catch (error) {
     elements.empty.hidden = false;
     elements.composer.hidden = true;
@@ -461,5 +534,11 @@ elements.sendMessage.addEventListener("click", sendCurrentEmail);
 elements.companyReached.addEventListener("change", () => {
   if (state.selected) toggleReached(state.selected.company, elements.companyReached.checked);
 });
+elements.loginOpen.addEventListener("click", showLogin);
+elements.loginSkip.addEventListener("click", () => {
+  elements.loginOverlay.hidden = true;
+});
+elements.loginForm.addEventListener("submit", submitLogin);
+elements.logout.addEventListener("click", logout);
 
 init();

@@ -101,6 +101,90 @@ h2 {
   font-weight: 800;
 }
 
+.session-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#session-label {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(7, 7, 10, 0.72);
+}
+
+.login-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #101018;
+}
+
+.login-copy,
+.login-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.login-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.login-card input[type="email"],
+.login-card input[type="password"] {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  outline: none;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.login-card input:focus {
+  border-color: var(--acid);
+  box-shadow: 0 0 0 3px var(--acid-soft);
+}
+
+.remember {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.login-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.login-status.is-error { color: var(--danger); }
+.login-status.is-ok { color: #3ee0a0; }
+
 .safe-mode {
   display: flex;
   align-items: center;
@@ -571,7 +655,7 @@ dd a { text-decoration-color: var(--acid); }
     grid-template-columns: auto 1fr;
     padding: 15px 18px;
   }
-  .reached-count { justify-self: end; }
+  .session-box { justify-self: end; }
   .safe-mode { display: none; }
   main { display: block; }
   .contacts-panel {

@@ -85,20 +85,13 @@ Then open `http://127.0.0.1:8765`. The app reads the latest
 suggests three opening lines, lets you edit the recipient, subject and full
 email, switches between Czech and English, and copies the finished message.
 
-Sending is optional and always one email at a time. Set Gmail credentials in
-the same terminal before starting the app:
-
-```bash
-export SMTP_USER="rich.andrys@gmail.com"
-export SMTP_PASSWORD="your-gmail-app-password"
-python3 outreach/contact_app.py
-```
-
-The Send button stays disabled until those variables are present. Each click
-sends only the currently visible email after a confirmation dialog. Duplicate
-addresses are blocked by `outreach/sent_log.csv`. Companies you have already
-reached — sent or marked by hand — are stored in `outreach/reached.csv` and
-shown in green with a running counter. The spreadsheet is never modified.
+Sending is optional and always one email at a time. Log in inside the app with
+your Gmail address and a Google App Password. The password is stored only on
+this computer, in memory and optionally in gitignored `outreach/.smtp.json`.
+It is never returned to the browser after login. Duplicate addresses are
+blocked by `outreach/sent_log.csv`. Companies you have already reached — sent
+or marked by hand — are stored in `outreach/reached.csv` and shown in green
+with a running counter. The spreadsheet is never modified.
 
 ## Production email sending
 

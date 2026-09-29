@@ -29,7 +29,9 @@ CONTACTS = HERE / "production_leads.csv"
 REACHED = HERE / "reached.csv"
 ASSETS = HERE / "contact_app"
 REACHED_FIELDS = ["company", "reached_on", "source"]
-REACHED_LOCK = threading.Lock()
+CREDENTIALS_FILE = HERE / ".smtp.json"
+CREDENTIALS_LOCK = threading.Lock()
+SESSION_CREDENTIALS: dict[str, str] = {}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SEND_BYTES = 80_000
 ASSET_TYPES = {
@@ -119,14 +121,97 @@ def set_reached(company: str, reached: bool, source: str = "manual") -> dict[str
         return reached_payload()
 
 
-def smtp_ready() -> dict[str, object]:
-    user = os.environ.get("SMTP_USER", "").strip()
-    password = os.environ.get("SMTP_PASSWORD", "").strip()
+def load_saved_credentials() -> dict[str, str]:
+    if not CREDENTIALS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    user = str(data.get("user", "")).strip()
+    password = str(data.get("password", "")).strip()
+    if not user or not password:
+        return {}
+    return {"user": user, "password": password}
+
+
+def current_credentials() -> dict[str, str]:
+    with CREDENTIALS_LOCK:
+        if SESSION_CREDENTIALS.get("user") and SESSION_CREDENTIALS.get("password"):
+            return dict(SESSION_CREDENTIALS)
+        saved = load_saved_credentials()
+        if saved:
+            SESSION_CREDENTIALS.update(saved)
+        return dict(saved)
+
+
+def save_credentials(user: str, password: str, persist: bool) -> None:
+    with CREDENTIALS_LOCK:
+        SESSION_CREDENTIALS["user"] = user
+        SESSION_CREDENTIALS["password"] = password
+        if persist:
+            CREDENTIALS_FILE.write_text(
+                json.dumps({"user": user, "password": password}),
+                encoding="utf-8",
+            )
+            CREDENTIALS_FILE.chmod(0o600)
+        elif CREDENTIALS_FILE.exists():
+            CREDENTIALS_FILE.unlink()
+
+
+def clear_credentials() -> None:
+    with CREDENTIALS_LOCK:
+        SESSION_CREDENTIALS.clear()
+        if CREDENTIALS_FILE.exists():
+            CREDENTIALS_FILE.unlink()
+
+
+def smtp_settings() -> tuple[str, int, str, str, str]:
+    stored = current_credentials()
+    user = stored.get("user") or os.environ.get("SMTP_USER", "").strip()
+    password = stored.get("password") or os.environ.get("SMTP_PASSWORD", "").strip()
     sender = os.environ.get("SMTP_FROM", user).strip()
-    return {
-        "configured": bool(user and password),
-        "from": sender if user and password else "",
-    }
+    if not user or not password:
+        raise RuntimeError("Log in with your Gmail address and App Password first.")
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    return host, port, user, password, sender or user
+
+
+def verify_smtp(user: str, password: str) -> None:
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    context = ssl.create_default_context()
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        server.ehlo()
+        server.starttls(context=context)
+        server.ehlo()
+        server.login(user, password)
+
+
+def login(user: str, password: str, persist: bool) -> dict[str, object]:
+    user = user.strip()
+    password = password.strip()
+    if not EMAIL_RE.fullmatch(user):
+        raise ValueError("Enter a valid Gmail address.")
+    if len(password) < 8:
+        raise ValueError("Enter a Gmail App Password, not a short placeholder.")
+    try:
+        verify_smtp(user, password)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise ValueError("Gmail rejected the login. Use an App Password, not your normal password.") from exc
+    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
+        raise ValueError("Could not reach Gmail SMTP. Check the network and try again.") from exc
+    save_credentials(user, password, persist)
+    return smtp_ready()
+
+
+def smtp_ready() -> dict[str, object]:
+    try:
+        _host, _port, user, _password, sender = smtp_settings()
+    except RuntimeError:
+        return {"configured": False, "from": ""}
+    return {"configured": True, "from": sender or user}
 
 
 def send_one_email(payload: dict[str, object]) -> dict[str, str]:
@@ -148,7 +233,7 @@ def send_one_email(payload: dict[str, object]) -> dict[str, str]:
         raise ValueError("Unknown company. Reload the contact sheet and try again.")
     if recipient.casefold() in mailer.sent_addresses():
         raise ValueError(f"Already sent to {recipient}.")
-    host, port, user, password, sender = mailer.smtp_settings()
+    host, port, user, password, sender = smtp_settings()
     message = mailer.build_message(
         {"to": recipient, "subject": subject, "body": body + "\n", "attachment": ""},
         sender,
@@ -188,15 +273,27 @@ class ContactAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - inherited HTTP method name
         path = urlparse(self.path).path
-        if path not in {"/api/send", "/api/reached"}:
+        if path not in {"/api/send", "/api/reached", "/api/login", "/api/logout"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         length = int(self.headers.get("Content-Length") or "0")
+        if path == "/api/logout":
+            clear_credentials()
+            self.send_json({"ok": True, **smtp_ready()})
+            return
         if length <= 0 or length > MAX_SEND_BYTES:
             self.send_json({"ok": False, "error": "Message is empty or too large."}, HTTPStatus.BAD_REQUEST)
             return
         try:
             payload = json.loads(self.rfile.read(length).decode())
+            if path == "/api/login":
+                result = login(
+                    str(payload.get("user", "")),
+                    str(payload.get("password", "")),
+                    bool(payload.get("persist", True)),
+                )
+                self.send_json({"ok": True, **result})
+                return
             if path == "/api/reached":
                 result = set_reached(
                     str(payload.get("company", "")),
@@ -208,8 +305,10 @@ class ContactAppHandler(BaseHTTPRequestHandler):
             result = send_one_email(payload)
         except (json.JSONDecodeError, ValueError, RuntimeError, smtplib.SMTPException, OSError) as exc:
             status = HTTPStatus.BAD_REQUEST
-            if isinstance(exc, RuntimeError) and "SMTP_" in str(exc):
-                status = HTTPStatus.SERVICE_UNAVAILABLE
+            if isinstance(exc, RuntimeError) and "Log in" in str(exc):
+                status = HTTPStatus.UNAUTHORIZED
+            elif isinstance(exc, smtplib.SMTPAuthenticationError):
+                status = HTTPStatus.UNAUTHORIZED
             self.send_json({"ok": False, "error": str(exc)}, status)
             return
         self.send_json({"ok": True, **result})
