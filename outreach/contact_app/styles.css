@@ -52,7 +52,7 @@ a { color: inherit; }
 .topbar {
   min-height: 92px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: 20px;
   padding: 18px 28px;
@@ -90,6 +90,17 @@ h2 {
   font-size: 1.25rem;
 }
 
+.reached-count {
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid rgba(62, 224, 160, 0.35);
+  border-radius: 999px;
+  color: #3ee0a0;
+  background: rgba(62, 224, 160, 0.1);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .safe-mode {
   display: flex;
   align-items: center;
@@ -122,13 +133,20 @@ main {
 }
 
 .panel-heading,
-.company-title,
 .message-heading,
 .preview-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+}
+
+.company-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .panel-heading { padding: 22px 20px 12px; }
@@ -166,6 +184,7 @@ main {
 
 .filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   padding: 4px 14px 12px;
 }
@@ -200,29 +219,66 @@ main {
 
 .contact-row {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  padding: 12px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 9px;
-  cursor: pointer;
   text-align: left;
   background: transparent;
 }
 
+.contact-select {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 4px 0;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+}
+
+.reach-check {
+  display: grid;
+  place-items: center;
+}
+
+.reach-check input,
+.reached-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #3ee0a0;
+}
+
+.contact-row.is-reached {
+  background: rgba(62, 224, 160, 0.14);
+}
+
+.contact-row.is-reached .contact-name {
+  color: #3ee0a0;
+}
+
 .contact-row:hover { background: var(--panel-raised); }
+
+.contact-row.is-reached:hover {
+  background: rgba(62, 224, 160, 0.22);
+}
 
 .contact-row.is-active {
   color: #111;
   background: var(--acid);
 }
 
-.contact-row > span:first-child {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
+.contact-row.is-active.is-reached {
+  background: #b8ff57;
+}
+
+.contact-row.is-active .contact-name {
+  color: inherit;
 }
 
 .contact-name,
@@ -278,6 +334,20 @@ main {
   position: sticky;
   top: 22px;
   padding: 22px;
+}
+
+.company-card.is-reached {
+  border-color: rgba(62, 224, 160, 0.45);
+  box-shadow: inset 3px 0 0 #3ee0a0;
+}
+
+.reached-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #3ee0a0;
+  font-size: 0.74rem;
+  font-weight: 800;
 }
 
 .priority {
@@ -501,6 +571,7 @@ dd a { text-decoration-color: var(--acid); }
     grid-template-columns: auto 1fr;
     padding: 15px 18px;
   }
+  .reached-count { justify-self: end; }
   .safe-mode { display: none; }
   main { display: block; }
   .contacts-panel {

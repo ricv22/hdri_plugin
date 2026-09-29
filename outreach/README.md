@@ -96,8 +96,9 @@ python3 outreach/contact_app.py
 
 The Send button stays disabled until those variables are present. Each click
 sends only the currently visible email after a confirmation dialog. Duplicate
-addresses are blocked by `outreach/sent_log.csv`. The spreadsheet is never
-modified.
+addresses are blocked by `outreach/sent_log.csv`. Companies you have already
+reached — sent or marked by hand — are stored in `outreach/reached.csv` and
+shown in green with a running counter. The spreadsheet is never modified.
 
 ## Production email sending
 

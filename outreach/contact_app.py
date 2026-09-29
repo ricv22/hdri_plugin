@@ -15,6 +15,8 @@ import os
 import re
 import smtplib
 import ssl
+import threading
+from datetime import date
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,7 +26,10 @@ import send_production_emails as mailer
 
 HERE = Path(__file__).resolve().parent
 CONTACTS = HERE / "production_leads.csv"
+REACHED = HERE / "reached.csv"
 ASSETS = HERE / "contact_app"
+REACHED_FIELDS = ["company", "reached_on", "source"]
+REACHED_LOCK = threading.Lock()
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SEND_BYTES = 80_000
 ASSET_TYPES = {
@@ -38,6 +43,80 @@ def load_contacts() -> list[dict[str, str]]:
     """Return the current CSV contents without caching them."""
     with CONTACTS.open(newline="", encoding="utf-8-sig") as handle:
         return list(csv.DictReader(handle))
+
+
+def known_companies() -> set[str]:
+    return {row["company"].strip() for row in load_contacts() if row.get("company")}
+
+
+def load_reached() -> dict[str, dict[str, str]]:
+    """Return reached companies from the local tracker.
+
+    If the tracker file does not exist yet, seed it from the send log so
+    previously sent emails still count.
+    """
+    known = known_companies()
+    records: dict[str, dict[str, str]] = {}
+    if REACHED.exists():
+        with REACHED.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                company = row.get("company", "").strip()
+                if company in known:
+                    records[company] = {
+                        "company": company,
+                        "reached_on": row.get("reached_on") or date.today().isoformat(),
+                        "source": row.get("source") or "manual",
+                    }
+        return records
+    if mailer.SENT_LOG.exists():
+        with mailer.SENT_LOG.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                company = row.get("company", "").strip()
+                if company in known:
+                    records[company] = {
+                        "company": company,
+                        "reached_on": row.get("sent_on", date.today().isoformat()),
+                        "source": "sent",
+                    }
+    return records
+
+
+def write_reached(records: dict[str, dict[str, str]]) -> None:
+    with REACHED.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=REACHED_FIELDS)
+        writer.writeheader()
+        for company in sorted(records):
+            writer.writerow(records[company])
+
+
+def reached_payload() -> dict[str, object]:
+    records = load_reached()
+    return {
+        "reached": list(records.values()),
+        "count": len(records),
+        "total": len(known_companies()),
+    }
+
+
+def set_reached(company: str, reached: bool, source: str = "manual") -> dict[str, object]:
+    company = company.strip()
+    if company not in known_companies():
+        raise ValueError("Unknown company. Reload the contact sheet and try again.")
+    if source not in {"manual", "sent"}:
+        raise ValueError("Reached source must be manual or sent.")
+    with REACHED_LOCK:
+        records = load_reached()
+        if reached:
+            existing = records.get(company)
+            records[company] = {
+                "company": company,
+                "reached_on": existing["reached_on"] if existing else date.today().isoformat(),
+                "source": "sent" if (existing and existing.get("source") == "sent") or source == "sent" else "manual",
+            }
+        else:
+            records.pop(company, None)
+        write_reached(records)
+        return reached_payload()
 
 
 def smtp_ready() -> dict[str, object]:
@@ -82,7 +161,8 @@ def send_one_email(payload: dict[str, object]) -> dict[str, str]:
         server.login(user, password)
         server.send_message(message)
     mailer.append_sent(recipient, company, subject)
-    return {"to": recipient, "from": sender, "subject": subject}
+    reached = set_reached(company, True, source="sent")
+    return {"to": recipient, "from": sender, "subject": subject, "reached": reached}
 
 
 class ContactAppHandler(BaseHTTPRequestHandler):
@@ -93,6 +173,9 @@ class ContactAppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/send-status":
             self.send_json(smtp_ready())
+            return
+        if path == "/api/reached":
+            self.send_json(reached_payload())
             return
         if path == "/api/health":
             self.send_json({"ok": True, "contacts": len(load_contacts())})
@@ -105,7 +188,7 @@ class ContactAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - inherited HTTP method name
         path = urlparse(self.path).path
-        if path != "/api/send":
+        if path not in {"/api/send", "/api/reached"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         length = int(self.headers.get("Content-Length") or "0")
@@ -114,6 +197,14 @@ class ContactAppHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(self.rfile.read(length).decode())
+            if path == "/api/reached":
+                result = set_reached(
+                    str(payload.get("company", "")),
+                    bool(payload.get("reached")),
+                    str(payload.get("source") or "manual"),
+                )
+                self.send_json({"ok": True, **result})
+                return
             result = send_one_email(payload)
         except (json.JSONDecodeError, ValueError, RuntimeError, smtplib.SMTPException, OSError) as exc:
             status = HTTPStatus.BAD_REQUEST

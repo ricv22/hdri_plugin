@@ -8,6 +8,9 @@ const state = {
   openingIndex: 0,
   sendConfigured: false,
   sendFrom: "",
+  reached: {},
+  reachView: "all",
+  renderedCompany: "",
 };
 
 const elements = {
@@ -38,6 +41,9 @@ const elements = {
   copyMessage: document.querySelector("#copy-message"),
   sendMessage: document.querySelector("#send-message"),
   copyStatus: document.querySelector("#copy-status"),
+  reachedCount: document.querySelector("#reached-count"),
+  companyReached: document.querySelector("#company-reached"),
+  companyCard: document.querySelector(".company-card"),
 };
 
 const fixedCopy = {
@@ -123,8 +129,13 @@ function applyFilters() {
       state.priority === "all" ||
       (state.priority === "5" && rank === 5) ||
       (state.priority === "4" && rank >= 4);
+    const reached = isReached(contact.company);
+    const reachMatch =
+      state.reachView === "all" ||
+      (state.reachView === "reached" && reached) ||
+      (state.reachView === "open" && !reached);
     const haystack = `${contact.company} ${contact.country} ${contact.city} ${contact.focus}`.toLowerCase();
-    return priorityMatch && (!query || haystack.includes(query));
+    return priorityMatch && reachMatch && (!query || haystack.includes(query));
   });
 
   if (!state.selected || !state.filtered.includes(state.selected)) {
@@ -134,18 +145,43 @@ function applyFilters() {
   renderSelected();
 }
 
+function isReached(company) {
+  return Boolean(state.reached[company]);
+}
+
+function applyReached(payload) {
+  state.reached = Object.fromEntries((payload.reached || []).map((row) => [row.company, row]));
+  updateReachedCount();
+  if (state.contacts.length) applyFilters();
+}
+
+function updateReachedCount() {
+  const reached = Object.keys(state.reached).length;
+  const total = state.contacts.length;
+  elements.reachedCount.textContent = `Reached ${reached} / ${total}`;
+}
+
 function renderList() {
   elements.list.replaceChildren();
   elements.count.textContent = String(state.filtered.length);
+  updateReachedCount();
 
   for (const contact of state.filtered) {
     const row = elements.template.content.firstElementChild.cloneNode(true);
+    const reached = isReached(contact.company);
     row.querySelector(".contact-name").textContent = contact.company;
     row.querySelector(".contact-location").textContent = [contact.city, contact.country].filter(Boolean).join(" · ");
     row.querySelector(".contact-priority").textContent = contact.priority;
     row.classList.toggle("is-active", contact === state.selected);
+    row.classList.toggle("is-reached", reached);
     row.setAttribute("aria-selected", String(contact === state.selected));
-    row.addEventListener("click", () => selectContact(contact));
+    const checkbox = row.querySelector(".contact-reached");
+    checkbox.checked = reached;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      toggleReached(contact.company, checkbox.checked);
+    });
+    row.querySelector(".contact-select").addEventListener("click", () => selectContact(contact));
     elements.list.append(row);
   }
 }
@@ -154,6 +190,7 @@ function selectContact(contact) {
   state.selected = contact;
   state.language = defaultLanguage(contact);
   state.openingIndex = 0;
+  state.renderedCompany = "";
   renderList();
   renderSelected();
 }
@@ -165,6 +202,7 @@ function renderSelected() {
   elements.empty.hidden = hasContact;
 
   if (!contact) {
+    state.renderedCompany = "";
     elements.empty.innerHTML = "<p>No contacts match this filter.</p>";
     return;
   }
@@ -178,7 +216,12 @@ function renderSelected() {
   elements.companyWebsite.href = contact.website;
   elements.companySignal.textContent = contact.signal;
   elements.companyHook.textContent = contact.personalization_hook;
-  renderMessage();
+  elements.companyReached.checked = isReached(contact.company);
+  elements.companyCard.classList.toggle("is-reached", isReached(contact.company));
+  if (state.renderedCompany !== contact.company) {
+    state.renderedCompany = contact.company;
+    renderMessage();
+  }
 }
 
 function renderMessage() {
@@ -317,6 +360,8 @@ async function sendCurrentEmail() {
       throw new Error(result.error || `HTTP ${response.status}`);
     }
     elements.copyStatus.textContent = `Sent to ${result.to}`;
+    if (result.reached) applyReached(result.reached);
+    else await toggleReached(contact.company, true);
   } catch (error) {
     elements.copyStatus.textContent = `Not sent: ${error.message}`;
   } finally {
@@ -324,11 +369,29 @@ async function sendCurrentEmail() {
   }
 }
 
+async function toggleReached(company, reached) {
+  try {
+    const response = await fetch("/api/reached", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company, reached, source: "manual" }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    applyReached(result);
+  } catch (error) {
+    elements.copyStatus.textContent = `Could not update reached status: ${error.message}`;
+    renderList();
+    renderSelected();
+  }
+}
+
 async function init() {
   try {
-    const [contactsResponse, statusResponse] = await Promise.all([
+    const [contactsResponse, statusResponse, reachedResponse] = await Promise.all([
       fetch("/api/contacts", { cache: "no-store" }),
       fetch("/api/send-status", { cache: "no-store" }),
+      fetch("/api/reached", { cache: "no-store" }),
     ]);
     if (!contactsResponse.ok) throw new Error(`HTTP ${contactsResponse.status}`);
     const data = await contactsResponse.json();
@@ -336,6 +399,9 @@ async function init() {
       const status = await statusResponse.json();
       state.sendConfigured = Boolean(status.configured);
       state.sendFrom = status.from || "";
+    }
+    if (reachedResponse.ok) {
+      applyReached(await reachedResponse.json());
     }
     state.contacts = data.contacts;
     state.filtered = data.contacts;
@@ -356,8 +422,17 @@ elements.search.addEventListener("input", (event) => {
 
 document.querySelectorAll(".filter").forEach((button) => {
   button.addEventListener("click", () => {
-    state.priority = button.dataset.priority;
-    document.querySelectorAll(".filter").forEach((item) => item.classList.toggle("is-active", item === button));
+    if (button.dataset.reach) {
+      state.reachView = state.reachView === button.dataset.reach ? "all" : button.dataset.reach;
+    } else {
+      state.priority = button.dataset.priority;
+    }
+    document.querySelectorAll("[data-priority]").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.priority === state.priority);
+    });
+    document.querySelectorAll("[data-reach]").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.reach === state.reachView);
+    });
     applyFilters();
   });
 });
@@ -383,5 +458,8 @@ elements.copyMessage.addEventListener("click", () =>
   ),
 );
 elements.sendMessage.addEventListener("click", sendCurrentEmail);
+elements.companyReached.addEventListener("change", () => {
+  if (state.selected) toggleReached(state.selected.company, elements.companyReached.checked);
+});
 
 init();
