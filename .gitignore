@@ -7,6 +7,10 @@ __pycache__/
 venv/
 .env
 
+# Outreach mailer output
+outreach/drafts/
+outreach/sent_log.csv
+
 # API server runtime output (signed-download artifacts)
 hdri_api_server/data/*.hdr
 hdri_api_server/data/*.exr

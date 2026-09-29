@@ -66,5 +66,24 @@ Add **+1** for each true signal (max 5):
 ## Files
 
 - [`leads.csv`](./leads.csv) — master lead list (55 starter leads)
+- [`production_leads.csv`](./production_leads.csv) — production and VFX studio contacts
 - [`messages.md`](./messages.md) — Czech templates + follow-ups
 - [`sprint.md`](./sprint.md) — first outreach batch queue & tracking
+- [`send_production_emails.py`](./send_production_emails.py) — draft, approve, and send production emails
+
+## Production email sending
+
+The mailer reads `production_leads.csv`, writes one editable draft per studio, and sends only drafts you have marked `Approved: yes`. It will not send the same address twice. One run sends at most 20 messages, with a pause between them.
+
+Gmail needs an App Password, not your normal password:
+
+```bash
+export SMTP_USER="rich.andrys@gmail.com"
+export SMTP_PASSWORD="your-gmail-app-password"
+python3 outreach/send_production_emails.py draft --priority 5
+python3 outreach/send_production_emails.py approve --company "Blue Faces"
+python3 outreach/send_production_emails.py check
+python3 outreach/send_production_emails.py send --limit 5
+```
+
+`check` only logs in. `send` delivers the next approved drafts that have not already been logged in `outreach/sent_log.csv`. Drafts and the send log stay outside git.
