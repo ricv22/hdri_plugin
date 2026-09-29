@@ -166,10 +166,17 @@ def clear_credentials() -> None:
             CREDENTIALS_FILE.unlink()
 
 
+def normalize_app_password(password: str) -> str:
+    """Gmail App Passwords are often copied with spaces; SMTP wants 16 characters."""
+    return "".join(password.split())
+
+
 def smtp_settings() -> tuple[str, int, str, str, str]:
     stored = current_credentials()
     user = stored.get("user") or os.environ.get("SMTP_USER", "").strip()
-    password = stored.get("password") or os.environ.get("SMTP_PASSWORD", "").strip()
+    password = normalize_app_password(
+        stored.get("password") or os.environ.get("SMTP_PASSWORD", "")
+    )
     sender = os.environ.get("SMTP_FROM", user).strip()
     if not user or not password:
         raise RuntimeError("Log in with your Gmail address and App Password first.")
@@ -182,26 +189,42 @@ def verify_smtp(user: str, password: str) -> None:
     host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     port = int(os.environ.get("SMTP_PORT", "587"))
     context = ssl.create_default_context()
-    with smtplib.SMTP(host, port, timeout=30) as server:
-        server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
-        server.login(user, password)
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(user, password)
+            return
+    except smtplib.SMTPAuthenticationError:
+        raise
+    except (smtplib.SMTPException, OSError, TimeoutError):
+        with smtplib.SMTP_SSL(host, 465, context=context, timeout=20) as server:
+            server.ehlo()
+            server.login(user, password)
 
 
 def login(user: str, password: str, persist: bool) -> dict[str, object]:
     user = user.strip()
-    password = password.strip()
+    password = normalize_app_password(password)
     if not EMAIL_RE.fullmatch(user):
         raise ValueError("Enter a valid Gmail address.")
     if len(password) < 8:
-        raise ValueError("Enter a Gmail App Password, not a short placeholder.")
+        raise ValueError("Enter a Gmail App Password. Google shows it as 16 characters.")
     try:
         verify_smtp(user, password)
     except smtplib.SMTPAuthenticationError as exc:
-        raise ValueError("Gmail rejected the login. Use an App Password, not your normal password.") from exc
+        raise ValueError(
+            "Gmail rejected the login. Use an App Password from myaccount.google.com/apppasswords, not your normal password."
+        ) from exc
+    except smtplib.SMTPServerDisconnected as exc:
+        raise ValueError(
+            "Gmail closed the login. That usually means the App Password is wrong, or Google is blocking this computer. Try a new App Password, or run the composer on your Mac."
+        ) from exc
     except (smtplib.SMTPException, OSError, TimeoutError) as exc:
-        raise ValueError("Could not reach Gmail SMTP. Check the network and try again.") from exc
+        raise ValueError(
+            "Could not finish the Gmail login from this computer. Run `python3 outreach/contact_app.py` on your Mac and log in there — Gmail often blocks cloud servers."
+        ) from exc
     save_credentials(user, password, persist)
     return smtp_ready()
 
