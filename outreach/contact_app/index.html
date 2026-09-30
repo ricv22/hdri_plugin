@@ -43,6 +43,7 @@
         <button class="filter" type="button" data-priority="5">Priority 5</button>
         <button class="filter" type="button" data-priority="4">4+</button>
         <button class="filter" type="button" data-reach="reached">Reached</button>
+        <button class="filter" type="button" data-reach="replied">Replied</button>
         <button class="filter" type="button" data-reach="open">Open</button>
       </div>
 
@@ -66,6 +67,10 @@
               <input id="company-reached" type="checkbox">
               <span>Reached</span>
             </label>
+            <label class="replied-toggle">
+              <input id="company-replied" type="checkbox">
+              <span>Replied</span>
+            </label>
           </div>
           <p id="company-focus" class="focus"></p>
           <dl>
@@ -86,6 +91,16 @@
               <dd id="company-hook"></dd>
             </div>
           </dl>
+          <section id="response-card" class="response-card">
+            <p class="eyebrow">Their reply</p>
+            <p id="response-meta" class="message-meta"></p>
+            <textarea id="response-body" rows="7" placeholder="Paste their reply, or fetch it from Gmail after you log in."></textarea>
+            <div class="copy-actions">
+              <button id="fetch-response" class="secondary" type="button">Fetch from Gmail</button>
+              <button id="save-response" class="primary" type="button">Save reply</button>
+            </div>
+          </section>
+          <button id="delete-contact" class="danger" type="button">Delete contact</button>
         </section>
 
         <section class="message-card">

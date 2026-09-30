@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import email
+import imaplib
 import json
 import os
 import re
@@ -20,6 +22,8 @@ import sys
 import threading
 import webbrowser
 from datetime import date
+from email.header import decode_header
+from email.message import Message
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,11 +39,16 @@ REACHED = HERE / "reached.csv"
 ASSETS = HERE / "contact_app"
 REACHED_FIELDS = ["company", "reached_on", "source"]
 CREDENTIALS_FILE = HERE / ".smtp.json"
+RESPONSES = HERE / "responses.json"
 CREDENTIALS_LOCK = threading.Lock()
 REACHED_LOCK = threading.Lock()
+CONTACTS_LOCK = threading.Lock()
+RESPONSE_LOCK = threading.Lock()
 SESSION_CREDENTIALS: dict[str, str] = {}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_SEND_BYTES = 80_000
+MAX_RESPONSE_CHARS = 12_000
+CONTACT_STATUSES = {"new", "sent", "replied", "won", "lost"}
 ASSET_TYPES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
@@ -169,6 +178,248 @@ def set_reached(company: str, reached: bool, source: str = "manual") -> dict[str
             records.pop(company, None)
         write_reached(records)
         return reached_payload()
+
+
+def read_contact_table() -> tuple[list[str], list[dict[str, str]]]:
+    with CONTACTS.open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        fields = list(reader.fieldnames or [])
+        return fields, list(reader)
+
+
+def write_contact_table(fields: list[str], rows: list[dict[str, str]]) -> None:
+    with CONTACTS.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n", extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def load_responses() -> dict[str, dict[str, str]]:
+    if not RESPONSES.exists():
+        return {}
+    try:
+        data = json.loads(RESPONSES.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): value for key, value in data.items() if isinstance(value, dict)}
+
+
+def write_responses(records: dict[str, dict[str, str]]) -> None:
+    RESPONSES.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    RESPONSES.chmod(0o600)
+
+
+def contacts_for_client() -> list[dict[str, str]]:
+    """Return sheet rows plus any saved reply, which stays out of git."""
+    saved = load_responses()
+    contacts: list[dict[str, str]] = []
+    for row in load_contacts():
+        item = dict(row)
+        reply = saved.get(row.get("company", "").strip(), {})
+        item["response_from"] = str(reply.get("from", ""))
+        item["response_subject"] = str(reply.get("subject", ""))
+        item["response_date"] = str(reply.get("date", ""))
+        item["response_body"] = str(reply.get("body", ""))
+        item["response_source"] = str(reply.get("source", ""))
+        contacts.append(item)
+    return contacts
+
+
+def contact_mutation_payload() -> dict[str, object]:
+    return {"contacts": contacts_for_client(), **reached_payload()}
+
+
+def set_contact_status(company: str, status: str) -> None:
+    company = company.strip()
+    if status not in CONTACT_STATUSES:
+        raise ValueError("Status must be new, sent, replied, won, or lost.")
+    with CONTACTS_LOCK:
+        fields, rows = read_contact_table()
+        found = False
+        for row in rows:
+            if row.get("company", "").strip() == company:
+                row["status"] = status
+                found = True
+                break
+        if not found:
+            raise ValueError("Unknown company. Reload the contact sheet and try again.")
+        write_contact_table(fields, rows)
+
+
+def delete_contact(company: str) -> dict[str, object]:
+    """Remove one studio from the sheet, the reached list, and any saved reply."""
+    company = company.strip()
+    with CONTACTS_LOCK:
+        fields, rows = read_contact_table()
+        kept = [row for row in rows if row.get("company", "").strip() != company]
+        if len(kept) == len(rows):
+            raise ValueError("Unknown company. Reload the contact sheet and try again.")
+        write_contact_table(fields, kept)
+    with REACHED_LOCK:
+        if REACHED.exists():
+            records = {}
+            with REACHED.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    name = row.get("company", "").strip()
+                    if name and name != company:
+                        records[name] = {
+                            "company": name,
+                            "reached_on": row.get("reached_on") or date.today().isoformat(),
+                            "source": row.get("source") or "manual",
+                        }
+            write_reached(records)
+    with RESPONSE_LOCK:
+        saved = load_responses()
+        saved.pop(company, None)
+        write_responses(saved)
+    return contact_mutation_payload()
+
+
+def store_response(
+    company: str,
+    body: str,
+    *,
+    subject: str = "",
+    sender: str = "",
+    when: str = "",
+    source: str = "manual",
+) -> dict[str, object]:
+    company = company.strip()
+    body = body.strip()
+    if company not in known_companies():
+        raise ValueError("Unknown company. Reload the contact sheet and try again.")
+    if not body:
+        raise ValueError("The reply is empty.")
+    if source not in {"manual", "gmail"}:
+        raise ValueError("Reply source must be manual or gmail.")
+    record = {
+        "from": sender.strip(),
+        "subject": subject.strip(),
+        "date": when.strip() or date.today().isoformat(),
+        "body": body[:MAX_RESPONSE_CHARS],
+        "source": source,
+        "saved_on": date.today().isoformat(),
+    }
+    with RESPONSE_LOCK:
+        saved = load_responses()
+        saved[company] = record
+        write_responses(saved)
+    set_contact_status(company, "replied")
+    set_reached(company, True, source="manual")
+    return contact_mutation_payload()
+
+
+def clear_response(company: str) -> dict[str, object]:
+    company = company.strip()
+    if company not in known_companies():
+        raise ValueError("Unknown company. Reload the contact sheet and try again.")
+    with RESPONSE_LOCK:
+        saved = load_responses()
+        saved.pop(company, None)
+        write_responses(saved)
+    set_contact_status(company, "sent")
+    return contact_mutation_payload()
+
+
+def decode_mime_header(value: str | None) -> str:
+    if not value:
+        return ""
+    chunks: list[str] = []
+    for text, charset in decode_header(value):
+        if isinstance(text, bytes):
+            chunks.append(text.decode(charset or "utf-8", errors="replace"))
+        else:
+            chunks.append(text)
+    return "".join(chunks).strip()
+
+
+def message_text(message: Message) -> str:
+    preferred: str = ""
+    html_fallback: str = ""
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        if part.get_content_maintype() == "multipart":
+            continue
+        disposition = (part.get("Content-Disposition") or "").lower()
+        if "attachment" in disposition:
+            continue
+        payload = part.get_payload(decode=True)
+        if not isinstance(payload, bytes):
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        text = payload.decode(charset, errors="replace").strip()
+        if part.get_content_type() == "text/plain" and text:
+            preferred = text
+            break
+        if part.get_content_type() == "text/html" and text and not html_fallback:
+            html_fallback = text
+    if preferred:
+        return preferred
+    if not html_fallback:
+        return ""
+    no_tags = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html_fallback)
+    no_tags = re.sub(r"(?s)<[^>]+>", " ", no_tags)
+    return re.sub(r"\s+", " ", no_tags).strip()
+
+
+def fetch_gmail_reply(company: str) -> dict[str, object]:
+    """Save the newest inbox message from this studio onto the contact."""
+    company = company.strip()
+    contacts = {row["company"]: row for row in load_contacts()}
+    row = contacts.get(company)
+    if row is None:
+        raise ValueError("Unknown company. Reload the contact sheet and try again.")
+    address = row.get("contact_email", "").strip()
+    if not EMAIL_RE.fullmatch(address):
+        raise ValueError("This contact has no email address to look up in Gmail.")
+    _host, _port, user, password, _sender = smtp_settings()
+    try:
+        imap = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=30)
+    except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
+        raise ValueError("Could not reach Gmail. Run the composer on your Mac and log in there.") from exc
+    try:
+        imap.login(user, password)
+        selected = False
+        for mailbox in ("[Gmail]/All Mail", "INBOX"):
+            status, _data = imap.select(mailbox, readonly=True)
+            if status == "OK":
+                selected = True
+                break
+        if not selected:
+            raise ValueError("Could not open the Gmail mailbox.")
+        status, data = imap.search(None, "FROM", address)
+        if status != "OK" or not data or not data[0]:
+            raise ValueError(f"No email from {address} in this Gmail account.")
+        latest = data[0].split()[-1]
+        status, fetched = imap.fetch(latest, "(BODY.PEEK[])")
+        if status != "OK" or not fetched:
+            raise ValueError(f"Gmail found mail from {address}, but the message could not be read.")
+        raw = next((item[1] for item in fetched if isinstance(item, tuple) and isinstance(item[1], bytes)), b"")
+        if not raw:
+            raise ValueError(f"Gmail found mail from {address}, but the message was empty.")
+        message = email.message_from_bytes(raw)
+        body = message_text(message)
+        if not body:
+            raise ValueError(f"The email from {address} has no text to attach.")
+        return store_response(
+            company,
+            body,
+            subject=decode_mime_header(message.get("Subject")),
+            sender=decode_mime_header(message.get("From")),
+            when=decode_mime_header(message.get("Date")),
+            source="gmail",
+        )
+    except imaplib.IMAP4.error as exc:
+        raise ValueError(
+            "Gmail refused to open the mailbox. Use an App Password, and turn IMAP on in Gmail settings."
+        ) from exc
+    finally:
+        try:
+            imap.logout()
+        except (imaplib.IMAP4.error, OSError):
+            pass
 
 
 def load_saved_credentials() -> dict[str, str]:
@@ -355,7 +606,7 @@ class ContactAppHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - inherited HTTP method name
         path = urlparse(self.path).path
         if path == "/api/contacts":
-            self.send_json({"contacts": load_contacts()})
+            self.send_json({"contacts": contacts_for_client()})
             return
         if path == "/api/send-status":
             self.send_json(smtp_ready())
@@ -374,7 +625,15 @@ class ContactAppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - inherited HTTP method name
         path = urlparse(self.path).path
-        if path not in {"/api/send", "/api/reached", "/api/login", "/api/logout"}:
+        if path not in {
+            "/api/send",
+            "/api/reached",
+            "/api/login",
+            "/api/logout",
+            "/api/contact/delete",
+            "/api/contact/replied",
+            "/api/contact/response",
+        }:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         length = int(self.headers.get("Content-Length") or "0")
@@ -401,6 +660,36 @@ class ContactAppHandler(BaseHTTPRequestHandler):
                     bool(payload.get("reached")),
                     str(payload.get("source") or "manual"),
                 )
+                self.send_json({"ok": True, **result})
+                return
+            if path == "/api/contact/delete":
+                result = delete_contact(str(payload.get("company", "")))
+                self.send_json({"ok": True, **result})
+                return
+            if path == "/api/contact/replied":
+                company = str(payload.get("company", "")).strip()
+                replied = payload.get("replied") is not False
+                if company not in known_companies():
+                    raise ValueError("Unknown company. Reload the contact sheet and try again.")
+                set_contact_status(company, "replied" if replied else "sent")
+                if replied:
+                    set_reached(company, True, source="manual")
+                result = contact_mutation_payload()
+                self.send_json({"ok": True, **result})
+                return
+            if path == "/api/contact/response":
+                company = str(payload.get("company", ""))
+                if payload.get("fetch") is True:
+                    result = fetch_gmail_reply(company)
+                elif payload.get("clear") is True:
+                    result = clear_response(company)
+                else:
+                    result = store_response(
+                        company,
+                        str(payload.get("body", "")),
+                        subject=str(payload.get("subject", "")),
+                        source="manual",
+                    )
                 self.send_json({"ok": True, **result})
                 return
             result = send_one_email(payload)

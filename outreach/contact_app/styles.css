@@ -436,6 +436,71 @@ main {
   box-shadow: inset 3px 0 0 #3ee0a0;
 }
 
+.company-card.is-replied {
+  border-color: rgba(120, 170, 255, 0.55);
+  box-shadow: inset 3px 0 0 #7aaaff;
+}
+
+.replied-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #9eb7ff;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.replied-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #7aaaff;
+}
+
+.response-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.response-card textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background: #09090d;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.response-card textarea:focus {
+  border-color: #7aaaff;
+}
+
+.danger {
+  margin-top: 16px;
+  padding: 9px 13px;
+  border: 1px solid rgba(255, 107, 107, 0.45);
+  border-radius: 999px;
+  color: #ff8d8d;
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.danger:hover {
+  border-color: var(--danger);
+  color: white;
+  background: rgba(255, 107, 107, 0.16);
+}
+
+.contact-row.is-replied {
+  box-shadow: inset 3px 0 0 #7aaaff;
+}
+
 .reached-toggle {
   display: flex;
   align-items: center;

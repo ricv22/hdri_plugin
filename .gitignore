@@ -12,6 +12,7 @@ outreach/drafts/
 outreach/sent_log.csv
 outreach/reached.csv
 outreach/.smtp.json
+outreach/responses.json
 
 # API server runtime output (signed-download artifacts)
 hdri_api_server/data/*.hdr

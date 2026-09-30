@@ -44,6 +44,12 @@ const elements = {
   copyStatus: document.querySelector("#copy-status"),
   reachedCount: document.querySelector("#reached-count"),
   companyReached: document.querySelector("#company-reached"),
+  companyReplied: document.querySelector("#company-replied"),
+  responseMeta: document.querySelector("#response-meta"),
+  responseBody: document.querySelector("#response-body"),
+  fetchResponse: document.querySelector("#fetch-response"),
+  saveResponse: document.querySelector("#save-response"),
+  deleteContact: document.querySelector("#delete-contact"),
   companyCard: document.querySelector(".company-card"),
   sessionLabel: document.querySelector("#session-label"),
   loginOpen: document.querySelector("#login-open"),
@@ -60,6 +66,8 @@ const elements = {
 };
 
 const REACHED_STORAGE_KEY = "outreach-reached";
+const RESPONSE_STORAGE_KEY = "outreach-responses";
+const DELETED_STORAGE_KEY = "outreach-deleted";
 
 function apiAvailable() {
   return location.protocol === "http:" || location.protocol === "https:";
@@ -76,6 +84,52 @@ function loadLocalReached() {
 
 function saveLocalReached(rows) {
   localStorage.setItem(REACHED_STORAGE_KEY, JSON.stringify(rows));
+}
+
+function loadLocalResponses() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RESPONSE_STORAGE_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalResponses(records) {
+  localStorage.setItem(RESPONSE_STORAGE_KEY, JSON.stringify(records));
+}
+
+function loadDeletedNames() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DELETED_STORAGE_KEY) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberDeleted(company) {
+  const names = loadDeletedNames();
+  names.add(company);
+  localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify([...names]));
+}
+
+function applyLocalResponses(contacts) {
+  const saved = loadLocalResponses();
+  for (const contact of contacts) {
+    const reply = saved[contact.company];
+    if (!reply) continue;
+    contact.response_body = reply.body || "";
+    contact.response_from = reply.from || "";
+    contact.response_subject = reply.subject || "";
+    contact.response_date = reply.date || "";
+    contact.response_source = reply.source || "manual";
+    if (reply.body || reply.status === "replied") contact.status = "replied";
+  }
+}
+
+function isReplied(contact) {
+  return contact?.status === "replied" || Boolean(contact?.response_body);
 }
 
 const fixedCopy = {
@@ -161,10 +215,12 @@ function applyFilters() {
       state.priority === "all" ||
       (state.priority === "5" && rank === 5) ||
       (state.priority === "4" && rank >= 4);
+    const replied = isReplied(contact);
     const reached = isReached(contact.company);
     const reachMatch =
       state.reachView === "all" ||
       (state.reachView === "reached" && reached) ||
+      (state.reachView === "replied" && replied) ||
       (state.reachView === "open" && !reached);
     const haystack = `${contact.company} ${contact.country} ${contact.city} ${contact.focus}`.toLowerCase();
     return priorityMatch && reachMatch && (!query || haystack.includes(query));
@@ -206,6 +262,7 @@ function renderList() {
     row.querySelector(".contact-priority").textContent = contact.priority;
     row.classList.toggle("is-active", contact === state.selected);
     row.classList.toggle("is-reached", reached);
+    row.classList.toggle("is-replied", isReplied(contact));
     row.setAttribute("aria-selected", String(contact === state.selected));
     const checkbox = row.querySelector(".contact-reached");
     checkbox.checked = reached;
@@ -249,8 +306,17 @@ function renderSelected() {
   elements.companySignal.textContent = contact.signal;
   elements.companyHook.textContent = contact.personalization_hook;
   elements.companyReached.checked = isReached(contact.company);
+  elements.companyReplied.checked = contact.status === "replied";
   elements.companyCard.classList.toggle("is-reached", isReached(contact.company));
+  elements.companyCard.classList.toggle("is-replied", isReplied(contact));
+  const replyFrom = contact.response_from || contact.contact_email || "";
+  const replyWhen = contact.response_date ? ` · ${contact.response_date}` : "";
+  const replySource = contact.response_source === "gmail" ? " · from Gmail" : "";
+  elements.responseMeta.textContent = contact.response_body
+    ? `${replyFrom}${replyWhen}${replySource}`
+    : "No reply saved yet.";
   if (state.renderedCompany !== contact.company) {
+    elements.responseBody.value = contact.response_body || "";
     state.renderedCompany = contact.company;
     renderMessage();
   }
@@ -416,6 +482,161 @@ async function sendCurrentEmail() {
   }
 }
 
+function replaceContacts(contacts) {
+  const selectedName = state.selected?.company;
+  state.contacts = contacts;
+  state.selected = contacts.find((contact) => contact.company === selectedName) || contacts[0] || null;
+  state.renderedCompany = "";
+  applyFilters();
+}
+
+async function deleteCurrentContact() {
+  const contact = state.selected;
+  if (!contact) return;
+  const confirmed = window.confirm(`Delete ${contact.company} from the contact sheet?`);
+  if (!confirmed) return;
+  if (state.fileMode || !apiAvailable()) {
+    rememberDeleted(contact.company);
+    const responses = loadLocalResponses();
+    delete responses[contact.company];
+    saveLocalResponses(responses);
+    state.contacts = state.contacts.filter((item) => item.company !== contact.company);
+    state.selected = state.contacts[0] || null;
+    state.renderedCompany = "";
+    applyFilters();
+    return;
+  }
+  try {
+    const response = await fetch("/api/contact/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: contact.company }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (result.reached) applyReached(result);
+    replaceContacts(result.contacts || []);
+    elements.copyStatus.textContent = `${contact.company} deleted`;
+  } catch (error) {
+    elements.copyStatus.textContent = `Not deleted: ${error.message}`;
+  }
+}
+
+async function setReplied(replied) {
+  const contact = state.selected;
+  if (!contact) return;
+  if (state.fileMode || !apiAvailable()) {
+    const responses = loadLocalResponses();
+    const existing = responses[contact.company] || {};
+    if (replied) {
+      responses[contact.company] = { ...existing, status: "replied" };
+    } else if (existing.body) {
+      responses[contact.company] = { ...existing, status: "sent" };
+    } else {
+      delete responses[contact.company];
+    }
+    saveLocalResponses(responses);
+    contact.status = replied ? "replied" : "sent";
+    renderList();
+    renderSelected();
+    return;
+  }
+  try {
+    const response = await fetch("/api/contact/replied", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: contact.company, replied }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (result.reached) applyReached(result);
+    replaceContacts(result.contacts || []);
+  } catch (error) {
+    elements.copyStatus.textContent = `Could not update reply: ${error.message}`;
+    renderSelected();
+  }
+}
+
+async function saveCurrentResponse() {
+  const contact = state.selected;
+  if (!contact) return;
+  const body = elements.responseBody.value.trim();
+  if (!body) {
+    elements.copyStatus.textContent = "Paste their reply first.";
+    return;
+  }
+  if (state.fileMode || !apiAvailable()) {
+    const responses = loadLocalResponses();
+    responses[contact.company] = {
+      from: contact.contact_email || "",
+      subject: "",
+      date: new Date().toISOString().slice(0, 10),
+      body,
+      source: "manual",
+    };
+    saveLocalResponses(responses);
+    contact.response_body = body;
+    contact.response_from = contact.contact_email || "";
+    contact.response_date = new Date().toISOString().slice(0, 10);
+    contact.response_source = "manual";
+    contact.status = "replied";
+    state.renderedCompany = "";
+    renderList();
+    renderSelected();
+    elements.copyStatus.textContent = "Reply saved on this computer";
+    return;
+  }
+  elements.saveResponse.disabled = true;
+  try {
+    const response = await fetch("/api/contact/response", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: contact.company, body }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (result.reached) applyReached(result);
+    replaceContacts(result.contacts || []);
+    elements.copyStatus.textContent = "Reply saved on this contact";
+  } catch (error) {
+    elements.copyStatus.textContent = `Reply not saved: ${error.message}`;
+  } finally {
+    elements.saveResponse.disabled = false;
+  }
+}
+
+async function fetchCurrentResponse() {
+  const contact = state.selected;
+  if (!contact) return;
+  if (state.fileMode || !apiAvailable()) {
+    elements.copyStatus.textContent = "Fetching mail needs the composer running on your Mac.";
+    return;
+  }
+  if (!state.sendConfigured) {
+    showLogin();
+    elements.copyStatus.textContent = "Log in with Gmail first, then fetch the reply.";
+    return;
+  }
+  elements.fetchResponse.disabled = true;
+  elements.copyStatus.textContent = "Looking in Gmail…";
+  try {
+    const response = await fetch("/api/contact/response", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: contact.company, fetch: true }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (result.reached) applyReached(result);
+    replaceContacts(result.contacts || []);
+    elements.copyStatus.textContent = "Reply attached from Gmail";
+  } catch (error) {
+    elements.copyStatus.textContent = `No reply attached: ${error.message}`;
+  } finally {
+    elements.fetchResponse.disabled = false;
+  }
+}
+
 async function toggleReached(company, reached) {
   if (state.fileMode || !apiAvailable()) {
     const records = Object.fromEntries(loadLocalReached().map((row) => [row.company, row]));
@@ -537,12 +758,14 @@ async function init() {
       } catch (apiError) {
         if (!window.EMBEDDED_CONTACTS?.contacts?.length) throw apiError;
         state.fileMode = true;
-        contacts = window.EMBEDDED_CONTACTS.contacts;
+        contacts = window.EMBEDDED_CONTACTS.contacts.filter((contact) => !loadDeletedNames().has(contact.company));
+        applyLocalResponses(contacts);
         applyReached({ reached: loadLocalReached() });
       }
     } else if (window.EMBEDDED_CONTACTS?.contacts?.length) {
       state.fileMode = true;
-      contacts = window.EMBEDDED_CONTACTS.contacts;
+      contacts = window.EMBEDDED_CONTACTS.contacts.filter((contact) => !loadDeletedNames().has(contact.company));
+      applyLocalResponses(contacts);
       applyReached({ reached: loadLocalReached() });
     } else {
       throw new Error("No contact list found.");
@@ -607,6 +830,12 @@ elements.sendMessage.addEventListener("click", sendCurrentEmail);
 elements.companyReached.addEventListener("change", () => {
   if (state.selected) toggleReached(state.selected.company, elements.companyReached.checked);
 });
+elements.companyReplied.addEventListener("change", () => {
+  setReplied(elements.companyReplied.checked);
+});
+elements.deleteContact.addEventListener("click", deleteCurrentContact);
+elements.saveResponse.addEventListener("click", saveCurrentResponse);
+elements.fetchResponse.addEventListener("click", fetchCurrentResponse);
 elements.loginOpen.addEventListener("click", showLogin);
 elements.loginSkip.addEventListener("click", () => {
   elements.loginOverlay.hidden = true;
