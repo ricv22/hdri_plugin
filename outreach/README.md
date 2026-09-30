@@ -74,23 +74,20 @@ Add **+1** for each true signal (max 5):
 
 ## Contact and message app
 
-On your Mac, double-click [`Open Composer.command`](./Open%20Composer.command)
-or open [`composer.html`](./composer.html) in Chrome/Safari. No Python server
-is required. You can compose and copy emails immediately.
-
-`http://127.0.0.1:8765` from this cloud agent does nothing on your Mac — that
-address is a different computer. Gmail sending from the app also has to run
-on the Mac, not here.
-
-From Terminal, if you want in-app sending:
+Run it on the Mac, in the repo folder:
 
 ```bash
+git fetch origin cursor/expand-production-contacts-c02a
+git checkout cursor/expand-production-contacts-c02a
+git pull
 python3 outreach/contact_app.py
 ```
 
-Pak otevri `http://127.0.0.1:8765`. Kdyz je port obsazeny *touto* appkou, prikaz
-to rekne a prohlizec otevre znovu — neni to chyba. Kdyz je obsazeny necim jinym,
-appka sama vezme dalsi volny port (8766, 8767, ...) a vypise URL.
+Safari opens at `http://127.0.0.1:8765`. Leave the Terminal window open.
+
+Or double-click [`Open Composer.command`](./Open%20Composer.command) inside `outreach/`.
+That file starts the server on this Mac and opens Safari. A cloud `127.0.0.1`
+address is a different computer and will not open in Safari on the Mac.
 
 The app reads the latest `production_leads.csv` whenever the page loads. It shows the current company,
 suggests three opening lines, lets you edit the recipient, subject and full

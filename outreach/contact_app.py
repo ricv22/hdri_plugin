@@ -15,6 +15,7 @@ import os
 import re
 import smtplib
 import ssl
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -448,21 +449,30 @@ def existing_server_running(port: int) -> bool:
         return False
 
 
+def open_in_browser(url: str) -> None:
+    """Open Safari on a Mac. Other systems use the default browser."""
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-a", "Safari", url], check=False)
+        return
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def announce_ready(url: str, already: bool = False, open_browser: bool = True) -> None:
     print()
     print("=" * 56)
     if already:
-        print("Composer is already running. This is not an error.")
+        print("Composer uz bezi. Tohle neni chyba.")
     else:
-        print("Composer is running.")
-    print(f"Open this in your browser:\n  {url}")
+        print("Composer bezi na tomhle Macu.")
+    print(f"Safari: {url}")
+    print("Nech tohle okno otevrene. Zavres ho, server se vypne.")
     print("=" * 56)
     print()
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+        open_in_browser(url)
 
 
 def bind_server(host: str, preferred_port: int) -> tuple[ReusableComposerServer, int]:
@@ -482,7 +492,7 @@ def bind_server(host: str, preferred_port: int) -> tuple[ReusableComposerServer,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     args = parser.parse_args()
