@@ -105,7 +105,7 @@ def load_reached() -> dict[str, dict[str, str]]:
                         "reached_on": row.get("reached_on") or date.today().isoformat(),
                         "source": row.get("source") or "manual",
                     }
-        return records
+        return _with_sheet_status(records)
     if mailer.SENT_LOG.exists():
         with mailer.SENT_LOG.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
@@ -116,6 +116,20 @@ def load_reached() -> dict[str, dict[str, str]]:
                         "reached_on": row.get("sent_on", date.today().isoformat()),
                         "source": "sent",
                     }
+    return _with_sheet_status(records)
+
+
+def _with_sheet_status(records: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Treat studios already marked sent or replied on the sheet as reached."""
+    for row in load_contacts():
+        company = row.get("company", "").strip()
+        status = row.get("status", "").strip().lower()
+        if company and status in {"sent", "replied", "won"} and company not in records:
+            records[company] = {
+                "company": company,
+                "reached_on": row.get("verified_on") or date.today().isoformat(),
+                "source": "sent" if status == "sent" else "manual",
+            }
     return records
 
 
