@@ -74,17 +74,15 @@ Add **+1** for each true signal (max 5):
 
 ## Contact and message app
 
-Run it on the Mac. Paste this whole block into Terminal. It finds the project folder, or downloads it into Documents if this Mac does not have it yet, then opens the composer:
+Run it on the Mac. Paste this whole block into Terminal. It downloads a fresh copy into Documents and replaces an older composer that is still open:
 
 ```bash
-FILE=$(find "$HOME" -maxdepth 5 \( -path "$HOME/Library" -o -path "$HOME/.*" \) -prune -o -type f -name contact_app.py -print -quit 2>/dev/null)
-if [ -n "$FILE" ]; then
-  cd "$(dirname "$(dirname "$FILE")")"
-else
-  cd "$HOME/Documents"
-  git clone https://github.com/ricv22/hdri_plugin.git
-  cd hdri_plugin
+mkdir -p "$HOME/Documents"
+cd "$HOME/Documents"
+if [ ! -d hdri-composer/.git ]; then
+  git clone --branch cursor/expand-production-contacts-c02a --single-branch https://github.com/ricv22/hdri_plugin.git hdri-composer
 fi
+cd hdri-composer
 git fetch origin cursor/expand-production-contacts-c02a
 git checkout cursor/expand-production-contacts-c02a
 git pull origin cursor/expand-production-contacts-c02a

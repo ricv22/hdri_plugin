@@ -20,6 +20,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import date, datetime, timezone
 from email.header import decode_header
@@ -47,6 +48,7 @@ CONTACTS_LOCK = threading.Lock()
 RESPONSE_LOCK = threading.Lock()
 SESSION_CREDENTIALS: dict[str, str] = {}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+COPY_ID = "vfx-spoluprace-1"
 MAX_SEND_BYTES = 80_000
 MAX_RESPONSE_CHARS = 12_000
 CONTACT_STATUSES = {"new", "sent", "replied", "won", "lost"}
@@ -81,11 +83,11 @@ def write_standalone_html() -> Path:
     contacts = (ASSETS / "contacts.js").read_text(encoding="utf-8")
     script = (ASSETS / "app.js").read_text(encoding="utf-8")
     html = html.replace(
-        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css?v=vfx-spoluprace-1">',
         f"<style>\n{css}\n</style>",
     )
     html = html.replace(
-        '  <script src="contacts.js"></script>\n  <script src="app.js" defer></script>',
+        '  <script src="contacts.js?v=vfx-spoluprace-1"></script>\n  <script src="app.js?v=vfx-spoluprace-1" defer></script>',
         f"<script>\n{contacts}\n</script>\n<script>\n{script}\n</script>",
     )
     path = HERE / "composer.html"
@@ -837,7 +839,7 @@ class ContactAppHandler(BaseHTTPRequestHandler):
             self.send_json(reached_payload())
             return
         if path == "/api/health":
-            self.send_json({"ok": True, "contacts": len(load_contacts())})
+            self.send_json({"ok": True, "contacts": len(load_contacts()), "copy": COPY_ID})
             return
         if path in ASSET_TYPES:
             filename, content_type = ASSET_TYPES[path]
@@ -946,7 +948,7 @@ class ContactAppHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -966,12 +968,44 @@ def health_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/api/health"
 
 
-def existing_server_running(port: int) -> bool:
+def read_health(port: int) -> dict[str, object]:
     try:
         with urlopen(health_url(port), timeout=1) as response:
-            return response.status == 200
-    except (URLError, OSError, TimeoutError):
-        return False
+            if response.status != 200:
+                return {}
+            data = json.loads(response.read().decode("utf-8"))
+    except (URLError, OSError, TimeoutError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def existing_server_running(port: int) -> bool:
+    return bool(read_health(port).get("ok"))
+
+
+def stop_listener(port: int) -> None:
+    """Stop an older composer that is still serving the previous email copy."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-tiTCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pids = [int(item) for item in result.stdout.split() if item.isdigit()]
+    except (FileNotFoundError, ValueError, OSError):
+        pids = []
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            continue
+    for _ in range(20):
+        if not existing_server_running(port):
+            return
+        time.sleep(0.1)
 
 
 def open_in_browser(url: str) -> None:
@@ -993,6 +1027,7 @@ def announce_ready(url: str, already: bool = False, open_browser: bool = True) -
     else:
         print("Composer bezi na tomhle Macu.")
     print(f"Safari: {url}")
+    print("Predmet: VFX spolupráce  /  VFX collaboration")
     print("Nech tohle okno otevrene. Zavres ho, server se vypne.")
     print("=" * 56)
     print()
@@ -1022,9 +1057,9 @@ def main() -> None:
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser window")
     args = parser.parse_args()
     write_standalone_html()
-    open_url = f"http://127.0.0.1:{args.port}"
-
-    if existing_server_running(args.port):
+    open_url = f"http://127.0.0.1:{args.port}/?v={COPY_ID}"
+    health = read_health(args.port)
+    if health.get("ok") and health.get("copy") == COPY_ID:
         announce_ready(open_url, already=True, open_browser=not args.no_browser)
         if sys.stdin.isatty():
             try:
@@ -1032,6 +1067,12 @@ def main() -> None:
             except EOFError:
                 pass
         return
+    if health.get("ok"):
+        print("Zastavuji starsi composer, aby se nacetl novy predmet a hlavicka.")
+        stop_listener(args.port)
+        if read_health(args.port).get("ok"):
+            print("Stary composer stale bezi. V tom druhem okne Terminalu stiskni Ctrl+C a spust tento prikaz znovu.")
+            raise SystemExit(1)
 
     try:
         server, port = bind_server(args.host, args.port)
@@ -1040,7 +1081,7 @@ def main() -> None:
             announce_ready(open_url, already=True, open_browser=not args.no_browser)
             return
         raise
-    open_url = f"http://127.0.0.1:{port}"
+    open_url = f"http://127.0.0.1:{port}/?v={COPY_ID}"
     print(f"Reading contacts from: {CONTACTS}")
     print("Press Ctrl+C to stop.")
     announce_ready(open_url, already=False, open_browser=not args.no_browser)
