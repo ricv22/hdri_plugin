@@ -69,12 +69,11 @@ def slug(company: str) -> str:
 
 def subject_and_body(row: dict[str, str]) -> tuple[str, str]:
     company = row["company"].strip()
-    focus = row["focus"].strip().rstrip(".")
     if czech_email(row):
         subject = "VFX spolupráce"
         body = f"""Dobrý den,
 
-píšu vám, protože se věnujete oblasti {focus}.
+Píšu vám, protože tvoříte reklamy a spoty, u kterých se 3D a VFX občas hodí.
 
 Jsem 3D grafik a produkcím pomáhám externě, když potřebují pokrýt konkrétní záběr nebo jen doplnit kapacitu.
 
@@ -94,7 +93,7 @@ rich.andrys@gmail.com
     subject = "VFX collaboration"
     body = f"""Hello {company} team,
 
-I'm writing because of your work in {focus}.
+I'm writing because you make ads and campaigns where 3D and VFX sometimes come in handy.
 
 I'm a 3D artist, and I help productions on a freelance basis when they need a specific shot covered, or just some extra capacity.
 

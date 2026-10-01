@@ -5,7 +5,6 @@ const state = {
   language: "en",
   priority: "all",
   query: "",
-  openingIndex: 0,
   sendConfigured: false,
   sendFrom: "",
   reached: {},
@@ -29,9 +28,6 @@ const elements = {
   companyWebsite: document.querySelector("#company-website"),
   companySignal: document.querySelector("#company-signal"),
   companyHook: document.querySelector("#company-hook"),
-  includeHeader: document.querySelector("#include-header"),
-  headerText: document.querySelector("#header-text"),
-  openings: document.querySelector("#opening-options"),
   opening: document.querySelector("#opening"),
   langCz: document.querySelector("#lang-cz"),
   langEn: document.querySelector("#lang-en"),
@@ -171,42 +167,6 @@ rich.andrys@gmail.com`,
   },
 };
 
-function strengths(contact) {
-  const text = `${contact.focus} ${contact.why_fit}`.toLowerCase();
-  if (text.includes("game") || text.includes("cinematic")) {
-    return { en: "3D animation, cinematics and visual storytelling", cz: "3D animaci, cinematiku a vizuální storytelling" };
-  }
-  if (text.includes("product") || text.includes("industrial") || text.includes("luxury")) {
-    return { en: "product CGI, animation and polished visual design", cz: "produktové CGI, animaci a precizní vizuální design" };
-  }
-  if (text.includes("film") || text.includes("series") || text.includes("television")) {
-    return { en: "film VFX, CGI and post-production", cz: "filmové VFX, CGI a postprodukci" };
-  }
-  if (text.includes("motion") || text.includes("animation")) {
-    return { en: "animation, motion design and CGI", cz: "animaci, motion design a CGI" };
-  }
-  if (text.includes("immersive") || text.includes("virtual production")) {
-    return { en: "CGI, immersive work and virtual production", cz: "CGI, immersive tvorbu a virtuální produkci" };
-  }
-  return { en: "3D, VFX and post-production", cz: "3D, VFX a postprodukci" };
-}
-
-function openingSuggestions(contact, language) {
-  const area = strengths(contact)[language];
-  if (language === "cz") {
-    return [
-      `Narazil jsem na ${contact.company} a zaujal mě způsob, jakým propojujete ${area}.`,
-      `Píšu vám, protože vaše práce v oblasti ${area} je blízko tomu, čemu se věnuji i já.`,
-      `Vaše studio mě zaujalo rozsahem práce v oblasti ${area} a rád bych nabídl externí 3D/VFX podporu.`,
-    ];
-  }
-  return [
-    `I came across ${contact.company} and was struck by how your work brings together ${area}.`,
-    `I'm reaching out because your work across ${area} overlaps closely with the kind of production support I offer.`,
-    `Your studio caught my attention for its work in ${area}, and I'd like to offer freelance 3D/VFX support.`,
-  ];
-}
-
 function defaultLanguage(contact) {
   return String(contact.outreach_language || "").toLowerCase().startsWith("czech") ? "cz" : "en";
 }
@@ -282,7 +242,6 @@ function renderList() {
 function selectContact(contact) {
   state.selected = contact;
   state.language = defaultLanguage(contact);
-  state.openingIndex = 0;
   state.renderedCompany = "";
   renderList();
   renderSelected();
@@ -332,31 +291,9 @@ function renderMessage() {
 
   elements.langCz.classList.toggle("is-active", state.language === "cz");
   elements.langEn.classList.toggle("is-active", state.language === "en");
-  elements.headerText.textContent = fixedCopy[state.language].header;
-  const suggestions = openingSuggestions(contact, state.language);
-  const selectedOpening = suggestions[state.openingIndex] || suggestions[0];
-
-  elements.openings.replaceChildren();
-  suggestions.forEach((text, index) => {
-    const label = document.createElement("label");
-    label.className = "opening-option";
-    label.classList.toggle("is-active", index === state.openingIndex);
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "opening";
-    radio.checked = index === state.openingIndex;
-    const span = document.createElement("span");
-    span.textContent = text;
-    label.append(radio, span);
-    label.addEventListener("click", () => {
-      state.openingIndex = index;
-      elements.opening.value = text;
-      renderMessage();
-    });
-    elements.openings.append(label);
-  });
-
-  elements.opening.value = selectedOpening;
+  elements.opening.value = fixedCopy[state.language].header;
+  elements.messageTo.value = contact.contact_email || "";
+  elements.messageSubject.value = fixedCopy[state.language].subject;
   updatePreview();
 }
 
@@ -364,12 +301,10 @@ function fullMessage() {
   const contact = state.selected;
   if (!contact) return "";
   const copy = fixedCopy[state.language];
-  const opening = elements.opening.value.trim();
-  const header = elements.includeHeader.checked ? copy.header : "";
-  const lead = [header, opening].filter(Boolean).join("\n\n");
+  const header = elements.opening.value.trim();
   return `${copy.greeting(contact.company)}
 
-${lead}
+${header}
 
 ${copy.body}`;
 }
@@ -380,8 +315,6 @@ function currentMessage() {
 
 function updatePreview() {
   if (!state.selected) return;
-  elements.messageTo.value = state.selected.contact_email || "";
-  elements.messageSubject.value = fixedCopy[state.language].subject;
   elements.preview.value = fullMessage();
   updateMeta();
 }
@@ -436,7 +369,6 @@ async function copyText(text, successMessage, button) {
 
 function changeLanguage(language) {
   state.language = language;
-  state.openingIndex = 0;
   renderMessage();
 }
 
@@ -815,15 +747,14 @@ document.querySelectorAll(".filter").forEach((button) => {
 
 elements.langCz.addEventListener("click", () => changeLanguage("cz"));
 elements.langEn.addEventListener("click", () => changeLanguage("en"));
-elements.includeHeader.addEventListener("change", updatePreview);
 elements.opening.addEventListener("input", updatePreview);
 elements.messageTo.addEventListener("input", updateMeta);
 elements.messageSubject.addEventListener("input", updateMeta);
-elements.resetMessage.addEventListener("click", updatePreview);
+elements.resetMessage.addEventListener("click", renderMessage);
 elements.copyOpening.addEventListener("click", () =>
   copyText(
     elements.opening.value.trim(),
-    state.language === "cz" ? "Úvod zkopírován" : "Opening copied",
+    state.language === "cz" ? "Hlavička zkopírována" : "Header copied",
     elements.copyOpening,
   ),
 );

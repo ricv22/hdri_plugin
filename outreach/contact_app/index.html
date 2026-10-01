@@ -107,7 +107,7 @@
           <div class="message-heading">
             <div>
               <p class="eyebrow">Compose</p>
-              <h2>Choose an opening</h2>
+              <h2>Header</h2>
             </div>
             <div class="language-switch" aria-label="Message language">
               <button id="lang-cz" type="button" data-language="cz">CZ</button>
@@ -115,18 +115,8 @@
             </div>
           </div>
 
-          <label class="optional-header">
-            <input id="include-header" type="checkbox" checked>
-            <span>
-              <span class="eyebrow">Optional header</span>
-              <span id="header-text"></span>
-            </span>
-          </label>
-
-          <div id="opening-options" class="opening-options"></div>
-
           <label class="opening-editor">
-            <span>Your opening — editable</span>
+            <span>Header — editable</span>
             <textarea id="opening" rows="3"></textarea>
           </label>
 
@@ -136,8 +126,8 @@
               <p id="message-meta" class="message-meta"></p>
             </div>
             <div class="copy-actions">
-              <button id="reset-message" class="secondary" type="button">Reset from opening</button>
-              <button id="copy-opening" class="secondary" type="button">Copy opening</button>
+              <button id="reset-message" class="secondary" type="button">Reset</button>
+              <button id="copy-opening" class="secondary" type="button">Copy header</button>
               <button id="copy-message" class="secondary" type="button">Copy full message</button>
               <button id="send-message" class="primary" type="button">Send this email</button>
             </div>
