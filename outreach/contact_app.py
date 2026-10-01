@@ -364,8 +364,63 @@ def message_text(message: Message) -> str:
     return re.sub(r"\s+", " ", no_tags).strip()
 
 
+def list_mailbox_token(name: str) -> str:
+    """Mailbox argument for imaplib, which does not quote names itself."""
+    if name == "INBOX" or (name.startswith('"') and name.endswith('"')):
+        return name
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def mailboxes_from_list(lines: list[object]) -> list[str]:
+    """Prefer Gmail All Mail, then INBOX. Names stay in the server's own spelling."""
+    all_mail = ""
+    for item in lines:
+        if not isinstance(item, bytes):
+            continue
+        line = item.decode("utf-8", "replace")
+        match = re.match(r'^\((?P<flags>[^)]*)\)\s+"(?P<delim>[^"]*)"\s+(?P<name>.+)$', line)
+        if not match:
+            continue
+        if "\\All" in match.group("flags").split():
+            all_mail = match.group("name").strip()
+    ordered: list[str] = []
+    if all_mail:
+        ordered.append(list_mailbox_token(all_mail))
+    ordered.append("INBOX")
+    return ordered
+
+
+def imap_detail(exc: BaseException) -> str:
+    text = str(exc).replace("\n", " ").strip()
+    return text[:240] or exc.__class__.__name__
+
+
+def select_gmail_mailbox(imap: imaplib.IMAP4_SSL) -> str:
+    """Open a mailbox without aborting when one name is rejected."""
+    candidates = ["INBOX"]
+    try:
+        status, data = imap.list()
+    except imaplib.IMAP4.error:
+        status, data = "NO", []
+    if status == "OK" and data:
+        candidates = mailboxes_from_list(data)
+    errors: list[str] = []
+    for mailbox in candidates:
+        try:
+            status, _data = imap.select(mailbox, readonly=True)
+        except imaplib.IMAP4.error as exc:
+            errors.append(imap_detail(exc))
+            continue
+        if status == "OK":
+            return mailbox
+        errors.append(f"{mailbox} {status}")
+    detail = "; ".join(errors) or "no mailbox could be selected"
+    raise ValueError(f"Could not open a Gmail mailbox ({detail}).")
+
+
 def fetch_gmail_reply(company: str) -> dict[str, object]:
-    """Save the newest inbox message from this studio onto the contact."""
+    """Save the newest message from this studio onto the contact."""
     company = company.strip()
     contacts = {row["company"]: row for row in load_contacts()}
     row = contacts.get(company)
@@ -380,16 +435,16 @@ def fetch_gmail_reply(company: str) -> dict[str, object]:
     except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
         raise ValueError("Could not reach Gmail. Run the composer on your Mac and log in there.") from exc
     try:
-        imap.login(user, password)
-        selected = False
-        for mailbox in ("[Gmail]/All Mail", "INBOX"):
-            status, _data = imap.select(mailbox, readonly=True)
-            if status == "OK":
-                selected = True
-                break
-        if not selected:
-            raise ValueError("Could not open the Gmail mailbox.")
-        status, data = imap.search(None, "FROM", address)
+        try:
+            imap.login(user, password)
+        except imaplib.IMAP4.error as exc:
+            raise ValueError(
+                "Gmail rejected the IMAP login ("
+                + imap_detail(exc)
+                + "). Sending can work while mailbox access is still off: in Gmail open Settings, See all settings, Forwarding and POP/IMAP, and enable IMAP."
+            ) from exc
+        select_gmail_mailbox(imap)
+        status, data = imap.search(None, "FROM", f'"{address}"')
         if status != "OK" or not data or not data[0]:
             raise ValueError(f"No email from {address} in this Gmail account.")
         latest = data[0].split()[-1]
@@ -411,10 +466,6 @@ def fetch_gmail_reply(company: str) -> dict[str, object]:
             when=decode_mime_header(message.get("Date")),
             source="gmail",
         )
-    except imaplib.IMAP4.error as exc:
-        raise ValueError(
-            "Gmail refused to open the mailbox. Use an App Password, and turn IMAP on in Gmail settings."
-        ) from exc
     finally:
         try:
             imap.logout()
