@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Outreach Composer — Richard Andrýs</title>
+  <link rel="stylesheet" href="styles.css?v=vfx-spoluprace-2">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="index.html">RA<span>*</span></a>
+    <div>
+      <p class="eyebrow">Production outreach</p>
+      <h1>Message composer</h1>
+    </div>
+    <p id="reached-count" class="reached-count">Reached 0 / 0</p>
+    <p id="mode-banner" class="mode-banner" hidden>Copy mode</p>
+    <div class="session-box">
+      <span id="session-label">Not logged in</span>
+      <button id="login-open" class="secondary" type="button">Log in</button>
+      <button id="logout" class="secondary" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <aside class="contacts-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Contact sheet</p>
+          <h2>Studios</h2>
+        </div>
+        <span id="contact-count" class="count">—</span>
+      </div>
+
+      <label class="search">
+        <span class="sr-only">Search contacts</span>
+        <input id="search" type="search" placeholder="Search company or country…" autocomplete="off">
+      </label>
+
+      <div class="filters" aria-label="Priority filter">
+        <button class="filter is-active" type="button" data-priority="all">All</button>
+        <button class="filter" type="button" data-priority="5">Priority 5</button>
+        <button class="filter" type="button" data-priority="4">4+</button>
+        <button class="filter" type="button" data-reach="reached">Reached</button>
+        <button class="filter" type="button" data-reach="replied">Replied</button>
+        <button class="filter" type="button" data-reach="open">Open</button>
+      </div>
+
+      <div id="contact-list" class="contact-list" role="listbox" aria-label="Production contacts"></div>
+    </aside>
+
+    <section class="workspace">
+      <div id="empty-state" class="empty-state">
+        <p>Loading contacts…</p>
+      </div>
+
+      <div id="composer" class="composer" hidden>
+        <section class="company-card">
+          <div class="company-title">
+            <div>
+              <p id="company-location" class="eyebrow"></p>
+              <h2 id="company-name"></h2>
+            </div>
+            <span id="company-priority" class="priority"></span>
+            <label class="reached-toggle">
+              <input id="company-reached" type="checkbox">
+              <span>Reached</span>
+            </label>
+            <label class="replied-toggle">
+              <input id="company-replied" type="checkbox">
+              <span>Replied</span>
+            </label>
+          </div>
+          <p id="company-focus" class="focus"></p>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd><a id="company-email"></a></dd>
+            </div>
+            <div>
+              <dt>Website</dt>
+              <dd><a id="company-website" target="_blank" rel="noreferrer">Open site ↗</a></dd>
+            </div>
+            <div>
+              <dt>Current signal</dt>
+              <dd id="company-signal"></dd>
+            </div>
+            <div>
+              <dt>Research note</dt>
+              <dd id="company-hook"></dd>
+            </div>
+          </dl>
+          <section id="response-card" class="response-card">
+            <p class="eyebrow">Their reply</p>
+            <p id="response-meta" class="message-meta"></p>
+            <textarea id="response-body" rows="7" placeholder="Paste their reply, or fetch it from Gmail. A reply from another address in the same conversation is included, and so is a reply from the same company domain when the subject is your outreach email."></textarea>
+            <div class="copy-actions">
+              <button id="fetch-response" class="secondary" type="button">Fetch from Gmail</button>
+              <button id="save-response" class="primary" type="button">Save reply</button>
+            </div>
+          </section>
+          <button id="delete-contact" class="danger" type="button">Delete contact</button>
+        </section>
+
+        <section class="message-card">
+          <div class="message-heading">
+            <div>
+              <p class="eyebrow">Compose</p>
+              <h2>Header</h2>
+            </div>
+            <div class="language-switch" aria-label="Message language">
+              <button id="lang-cz" type="button" data-language="cz">CZ</button>
+              <button id="lang-en" type="button" data-language="en">EN</button>
+            </div>
+          </div>
+
+          <label class="opening-editor">
+            <span>Header — editable</span>
+            <textarea id="opening" rows="3"></textarea>
+          </label>
+          <label class="opening-editor tailored-editor">
+            <span>For this contact — editable</span>
+            <textarea id="tailored" rows="3"></textarea>
+          </label>
+
+          <div class="preview-heading">
+            <div>
+              <p class="eyebrow">Full email — editable</p>
+              <p id="message-meta" class="message-meta"></p>
+            </div>
+            <div class="copy-actions">
+              <button id="reset-message" class="secondary" type="button">Reset</button>
+              <button id="copy-opening" class="secondary" type="button">Copy header</button>
+              <button id="copy-message" class="secondary" type="button">Copy full message</button>
+              <button id="send-message" class="primary" type="button">Send this email</button>
+            </div>
+          </div>
+
+          <div class="email-fields">
+            <label>
+              <span>To</span>
+              <input id="message-to" type="email" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              <span>Subject</span>
+              <input id="message-subject" type="text" autocomplete="off">
+            </label>
+          </div>
+          <label class="message-editor">
+            <span class="sr-only">Email body</span>
+            <textarea id="message-preview" class="message-preview" rows="18"></textarea>
+          </label>
+          <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <template id="contact-template">
+    <div class="contact-row" role="option">
+      <label class="reach-check">
+        <input type="checkbox" class="contact-reached">
+        <span class="sr-only">Reached</span>
+      </label>
+      <button class="contact-select" type="button">
+        <strong class="contact-name"></strong>
+        <small class="contact-location"></small>
+      </button>
+      <span class="contact-priority"></span>
+    </div>
+  </template>
+
+  <div id="login-overlay" class="login-overlay" hidden>
+    <form id="login-form" class="login-card">
+      <p class="eyebrow">Gmail login</p>
+      <h2>Send from your account</h2>
+      <p id="login-copy" class="login-copy">Můžeš skládat a kopírovat maily bez přihlášení. Odesílání z appky potřebuje Gmail App Password z <strong>myaccount.google.com/apppasswords</strong>, ne běžné heslo. Spouštěj to na Macu (Open Composer.command) — Gmail cloud často blokuje.</p>
+      <label>
+        <span>Email</span>
+        <input id="login-user" type="email" autocomplete="username" spellcheck="false" value="rich.andrys@gmail.com">
+      </label>
+      <label>
+        <span>App Password</span>
+        <input id="login-password" type="password" autocomplete="current-password">
+      </label>
+      <label class="remember">
+        <input id="login-remember" type="checkbox" checked>
+        <span>Remember on this computer</span>
+      </label>
+      <p id="login-status" class="login-status" role="status" aria-live="polite"></p>
+      <div class="login-actions">
+        <button id="login-submit" class="primary" type="submit">Log in</button>
+        <button id="login-skip" class="secondary" type="button">Pokračovat bez odesílání</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="contacts.js?v=vfx-spoluprace-2"></script>
+  <script src="app.js?v=vfx-spoluprace-2" defer></script>
+</body>
+</html>

@@ -66,5 +66,60 @@ Add **+1** for each true signal (max 5):
 ## Files
 
 - [`leads.csv`](./leads.csv) — master lead list (55 starter leads)
+- [`production_leads.csv`](./production_leads.csv) — production and VFX studio contacts
 - [`messages.md`](./messages.md) — Czech templates + follow-ups
 - [`sprint.md`](./sprint.md) — first outreach batch queue & tracking
+- [`contact_app.py`](./contact_app.py) — local contact browser and message composer
+- [`send_production_emails.py`](./send_production_emails.py) — draft, approve, and send production emails
+
+## Contact and message app
+
+Run it on the Mac. Paste this whole block into Terminal. It downloads a fresh copy into Documents and replaces an older composer that is still open:
+
+```bash
+mkdir -p "$HOME/Documents"
+cd "$HOME/Documents"
+if [ ! -d hdri-composer/.git ]; then
+  git clone --branch cursor/expand-production-contacts-c02a --single-branch https://github.com/ricv22/hdri_plugin.git hdri-composer
+fi
+cd hdri-composer
+git fetch origin cursor/expand-production-contacts-c02a
+git checkout cursor/expand-production-contacts-c02a
+git pull origin cursor/expand-production-contacts-c02a
+python3 outreach/contact_app.py
+```
+
+Safari opens at `http://127.0.0.1:8765`. Leave the Terminal window open.
+
+Or double-click [`Open Composer.command`](./Open%20Composer.command) inside `outreach/`.
+That file starts the server on this Mac and opens Safari. A cloud `127.0.0.1`
+address is a different computer and will not open in Safari on the Mac.
+
+The app reads the latest `production_leads.csv` whenever the page loads. It shows the current company,
+starts from two editable headers, the second one written for that studio, and lets you edit the recipient, subject and full
+email, switches between Czech and English, and copies the finished message.
+
+Sending is optional and always one email at a time. Log in inside the app with
+your Gmail address and a Google App Password. The password is stored only on
+this computer, in memory and optionally in gitignored `outreach/.smtp.json`.
+It is never returned to the browser after login. Duplicate addresses are
+blocked by `outreach/sent_log.csv`. Companies you have already reached — sent
+or marked by hand — are stored in `outreach/reached.csv` and shown in green
+with a running counter. The spreadsheet is never modified.
+
+## Production email sending
+
+The optional mailer reads `production_leads.csv`, writes one editable draft per studio, and sends only drafts you have marked `Approved: yes`. It will not send the same address twice. One run sends at most 20 messages, with a pause between them. It does not attach a CV.
+
+Gmail needs an App Password, not your normal password:
+
+```bash
+export SMTP_USER="rich.andrys@gmail.com"
+export SMTP_PASSWORD="your-gmail-app-password"
+python3 outreach/send_production_emails.py draft --priority 5
+python3 outreach/send_production_emails.py approve --company "Blue Faces"
+python3 outreach/send_production_emails.py check
+python3 outreach/send_production_emails.py send --limit 5
+```
+
+`check` only logs in. `send` delivers the next approved drafts that have not already been logged in `outreach/sent_log.csv`. Drafts and the send log stay outside git.
