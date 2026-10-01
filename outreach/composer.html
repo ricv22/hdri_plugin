@@ -439,6 +439,11 @@ main {
   padding: 22px;
 }
 
+.company-card.is-reached {
+  border-color: rgba(62, 224, 160, 0.45);
+  box-shadow: inset 3px 0 0 #3ee0a0;
+}
+
 .company-card.is-replied {
   border-color: rgba(120, 170, 255, 0.55);
   box-shadow: inset 3px 0 0 #7aaaff;
@@ -846,7 +851,7 @@ dd a { text-decoration-color: var(--acid); }
           <section id="response-card" class="response-card">
             <p class="eyebrow">Their reply</p>
             <p id="response-meta" class="message-meta"></p>
-            <textarea id="response-body" rows="7" placeholder="Paste their reply, or fetch it from Gmail after you log in."></textarea>
+            <textarea id="response-body" rows="7" placeholder="Paste their reply, or fetch it from Gmail. A reply from another address in the same conversation is included, and so is a reply from the same company domain when the subject is your outreach email."></textarea>
             <div class="copy-actions">
               <button id="fetch-response" class="secondary" type="button">Fetch from Gmail</button>
               <button id="save-response" class="primary" type="button">Save reply</button>
@@ -1267,7 +1272,7 @@ function renderSelected() {
   const replySource = contact.response_source === "gmail" ? " · from Gmail" : "";
   elements.responseMeta.textContent = contact.response_body
     ? `${replyFrom}${replyWhen}${replySource}`
-    : "No reply saved yet.";
+    : "No reply saved yet. Fetch also picks up a different address in the same conversation, or at the same company when the subject is your outreach email.";
   if (state.renderedCompany !== contact.company) {
     elements.responseBody.value = contact.response_body || "";
     state.renderedCompany = contact.company;

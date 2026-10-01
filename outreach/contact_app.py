@@ -21,9 +21,10 @@ import subprocess
 import sys
 import threading
 import webbrowser
-from datetime import date
+from datetime import date, datetime, timezone
 from email.header import decode_header
 from email.message import Message
+from email.utils import parsedate_to_datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -419,8 +420,148 @@ def select_gmail_mailbox(imap: imaplib.IMAP4_SSL) -> str:
     raise ValueError(f"Could not open a Gmail mailbox ({detail}).")
 
 
+GENERIC_MAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "seznam.cz",
+    "email.cz",
+    "post.cz",
+    "centrum.cz",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "yahoo.com",
+    "icloud.com",
+    "me.com",
+    "proton.me",
+    "protonmail.com",
+    "aol.com",
+}
+
+
+def sender_address(value: str) -> str:
+    _name, address = email.utils.parseaddr(value or "")
+    return address.casefold()
+
+
+def message_timestamp(value: str) -> datetime:
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+OUTREACH_SUBJECT_MARKERS = (
+    "freelance 3d",
+    "vfx support",
+    "3d grafik",
+    "externí spolupráce",
+    "externi spoluprace",
+)
+
+
+def subject_matches_outreach(value: str) -> bool:
+    folded = (value or "").casefold()
+    return any(marker in folded for marker in OUTREACH_SUBJECT_MARKERS)
+
+
+def choose_reply(messages: list[dict[str, str]], own_addresses: set[str]) -> dict[str, str] | None:
+    """Pick the newest message in the conversation that we did not send."""
+    replies = [item for item in messages if sender_address(item.get("from", "")) not in own_addresses]
+    replies = [item for item in replies if sender_address(item.get("from", ""))]
+    if not replies:
+        return None
+    return max(replies, key=lambda item: message_timestamp(item.get("date", "")))
+
+
+def reply_candidates(
+    messages: list[dict[str, str]],
+    own_addresses: set[str],
+    saved_address: str,
+    anchor_threads: set[str],
+) -> list[dict[str, str]]:
+    """Keep mail for this contact that was sent by someone else.
+
+    A message counts when it is from the saved address, from any address in a
+    Gmail conversation that already includes that address, or from another
+    address at the same company domain when the subject is the outreach email.
+    """
+    saved = saved_address.casefold()
+    domain = company_domain(saved)
+    kept: list[dict[str, str]] = []
+    for item in messages:
+        sender = sender_address(item.get("from", ""))
+        if not sender or sender in own_addresses:
+            continue
+        thread = item.get("thread") or ""
+        if sender == saved or (thread and thread in anchor_threads):
+            kept.append(item)
+            continue
+        if domain and company_domain(sender) == domain and subject_matches_outreach(item.get("subject", "")):
+            kept.append(item)
+    return kept
+
+
+def company_domain(address: str) -> str:
+    domain = address.rsplit("@", 1)[-1].casefold()
+    if domain in GENERIC_MAIL_DOMAINS:
+        return ""
+    return domain
+
+
+def imap_search(imap: imaplib.IMAP4_SSL, *criteria: str) -> list[bytes]:
+    try:
+        status, data = imap.search(None, *criteria)
+    except imaplib.IMAP4.error:
+        return []
+    if status != "OK" or not data or not data[0]:
+        return []
+    return data[0].split()
+
+
+def fetch_message_index(imap: imaplib.IMAP4_SSL, ids: list[bytes]) -> list[dict[str, str]]:
+    """Read sender, date, and Gmail thread id without downloading bodies."""
+    found: list[dict[str, str]] = []
+    for start in range(0, len(ids), 20):
+        batch = b",".join(ids[start : start + 20]).decode()
+        try:
+            status, fetched = imap.fetch(batch, "(X-GM-THRID BODY.PEEK[HEADER.FIELDS (FROM DATE SUBJECT)])")
+        except imaplib.IMAP4.error:
+            continue
+        if status != "OK" or not fetched:
+            continue
+        for item in fetched:
+            if not isinstance(item, tuple) or len(item) < 2 or not isinstance(item[1], bytes):
+                continue
+            prefix = item[0].decode("utf-8", "replace") if isinstance(item[0], bytes) else str(item[0])
+            header = email.message_from_bytes(item[1])
+            sequence = prefix.split(" ", 1)[0]
+            thread = ""
+            match = re.search(r"X-GM-THRID (\d+)", prefix)
+            if match:
+                thread = match.group(1)
+            found.append(
+                {
+                    "seq": sequence,
+                    "thread": thread,
+                    "from": decode_mime_header(header.get("From")),
+                    "date": decode_mime_header(header.get("Date")),
+                    "subject": decode_mime_header(header.get("Subject")),
+                }
+            )
+    return found
+
+
 def fetch_gmail_reply(company: str) -> dict[str, object]:
-    """Save the newest message from this studio onto the contact."""
+    """Save the newest reply onto the contact.
+
+    A reply counts when it comes from the saved address, from any address in
+    that Gmail conversation, or from another address at the same company domain
+    when the subject is the outreach email.
+    """
     company = company.strip()
     contacts = {row["company"]: row for row in load_contacts()}
     row = contacts.get(company)
@@ -429,7 +570,9 @@ def fetch_gmail_reply(company: str) -> dict[str, object]:
     address = row.get("contact_email", "").strip()
     if not EMAIL_RE.fullmatch(address):
         raise ValueError("This contact has no email address to look up in Gmail.")
-    _host, _port, user, password, _sender = smtp_settings()
+    _host, _port, user, password, sender = smtp_settings()
+    own = {sender_address(user), sender_address(sender)}
+    own.discard("")
     try:
         imap = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=30)
     except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
@@ -444,20 +587,45 @@ def fetch_gmail_reply(company: str) -> dict[str, object]:
                 + "). Sending can work while mailbox access is still off: in Gmail open Settings, See all settings, Forwarding and POP/IMAP, and enable IMAP."
             ) from exc
         select_gmail_mailbox(imap)
-        status, data = imap.search(None, "FROM", f'"{address}"')
-        if status != "OK" or not data or not data[0]:
-            raise ValueError(f"No email from {address} in this Gmail account.")
-        latest = data[0].split()[-1]
-        status, fetched = imap.fetch(latest, "(BODY.PEEK[])")
+        anchor_ids: set[bytes] = set(imap_search(imap, "FROM", f'"{address}"'))
+        anchor_ids.update(imap_search(imap, "TO", f'"{address}"'))
+        domain = company_domain(address)
+        domain_ids: set[bytes] = set()
+        if domain:
+            for term in ("Freelance", "VFX", "grafik"):
+                domain_ids.update(imap_search(imap, "FROM", f'"{domain}"', "SUBJECT", f'"{term}"'))
+        if not anchor_ids and not domain_ids:
+            raise ValueError(
+                f"No email to or from {address}. A reply from a different address is attached when it is in the same conversation, or from @{domain or 'the company domain'} with your outreach subject."
+            )
+        anchor_index = fetch_message_index(imap, sorted(anchor_ids, key=lambda item: int(item))[-40:])
+        threads = {item["thread"] for item in anchor_index if item.get("thread")}
+        thread_ids: set[bytes] = set()
+        for thread in list(threads)[:12]:
+            thread_ids.update(imap_search(imap, "X-GM-THRID", thread))
+        conversation_ids = anchor_ids | thread_ids
+        extra_ids = sorted(domain_ids - conversation_ids, key=lambda item: int(item))[-20:]
+        selected = sorted(conversation_ids, key=lambda item: int(item))[-50:] + extra_ids
+        indexed = fetch_message_index(imap, selected)
+        chosen = choose_reply(reply_candidates(indexed, own, address, threads), own)
+        if chosen is None and anchor_ids:
+            raise ValueError(
+                f"Gmail has your mail with {address}, but no reply yet. A later reply from a different address in that conversation will be attached."
+            )
+        if chosen is None:
+            raise ValueError(
+                f"No reply from {address} or another @{domain or 'company'} address about this outreach."
+            )
+        status, fetched = imap.fetch(chosen["seq"], "(BODY.PEEK[])")
         if status != "OK" or not fetched:
-            raise ValueError(f"Gmail found mail from {address}, but the message could not be read.")
+            raise ValueError("Gmail found a reply, but the message could not be read.")
         raw = next((item[1] for item in fetched if isinstance(item, tuple) and isinstance(item[1], bytes)), b"")
         if not raw:
-            raise ValueError(f"Gmail found mail from {address}, but the message was empty.")
+            raise ValueError("Gmail found a reply, but the message was empty.")
         message = email.message_from_bytes(raw)
         body = message_text(message)
         if not body:
-            raise ValueError(f"The email from {address} has no text to attach.")
+            raise ValueError("The reply has no text to attach.")
         return store_response(
             company,
             body,

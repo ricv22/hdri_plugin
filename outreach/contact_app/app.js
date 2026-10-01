@@ -314,7 +314,7 @@ function renderSelected() {
   const replySource = contact.response_source === "gmail" ? " · from Gmail" : "";
   elements.responseMeta.textContent = contact.response_body
     ? `${replyFrom}${replyWhen}${replySource}`
-    : "No reply saved yet.";
+    : "No reply saved yet. Fetch also picks up a different address in the same conversation, or at the same company when the subject is your outreach email.";
   if (state.renderedCompany !== contact.company) {
     elements.responseBody.value = contact.response_body || "";
     state.renderedCompany = contact.company;
