@@ -594,6 +594,8 @@ dd a { text-decoration-color: var(--acid); }
   box-shadow: 0 0 0 3px var(--acid-soft);
 }
 
+.tailored-editor { margin-top: 12px; }
+
 .preview-heading {
   margin-top: 26px;
   padding-top: 22px;

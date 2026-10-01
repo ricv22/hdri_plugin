@@ -96,7 +96,7 @@ That file starts the server on this Mac and opens Safari. A cloud `127.0.0.1`
 address is a different computer and will not open in Safari on the Mac.
 
 The app reads the latest `production_leads.csv` whenever the page loads. It shows the current company,
-starts from one editable header, and lets you edit the recipient, subject and full
+starts from two editable headers, the second one written for that studio, and lets you edit the recipient, subject and full
 email, switches between Czech and English, and copies the finished message.
 
 Sending is optional and always one email at a time. Log in inside the app with

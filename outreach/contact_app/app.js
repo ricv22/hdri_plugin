@@ -29,6 +29,7 @@ const elements = {
   companySignal: document.querySelector("#company-signal"),
   companyHook: document.querySelector("#company-hook"),
   opening: document.querySelector("#opening"),
+  tailored: document.querySelector("#tailored"),
   langCz: document.querySelector("#lang-cz"),
   langEn: document.querySelector("#lang-en"),
   preview: document.querySelector("#message-preview"),
@@ -167,6 +168,57 @@ rich.andrys@gmail.com`,
   },
 };
 
+function tidyText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .replace(/\.+$/, "")
+    .trim();
+}
+
+function writeToDetail(hook) {
+  const match = hook.match(/^Write to\s+.+?\.\s+([\s\S]+)$/);
+  return match ? tidyText(match[1]) : "";
+}
+
+function namedReference(hook) {
+  const match = hook.match(/^(?:Reference|Mention)\s+(.+)$/i);
+  if (!match) return "";
+  const thing = match[1]
+    .replace(/\s+and\s+(?:offer|stress|send|mention|use)\b[\s\S]*$/i, "")
+    .replace(/\s+if\b[\s\S]*$/i, "");
+  return tidyText(thing);
+}
+
+function isStatusNote(text) {
+  return /neosloveno|osloveno|odpověd|jistota|\+\d{2,}/i.test(text);
+}
+
+function looksGeneric(text) {
+  return /^(their|its|the|a|an)\s+(hiring|contact|reel|site|studio|work|page)\b/i.test(text);
+}
+
+function contactDetail(contact) {
+  const hook = tidyText(contact.personalization_hook);
+  const signal = tidyText(contact.signal);
+  const fromWrite = writeToDetail(hook);
+  if (fromWrite) return fromWrite;
+  const named = namedReference(hook);
+  if (named && !looksGeneric(named)) return named;
+  if (signal && !isStatusNote(signal)) return signal;
+  if (hook && !/^(Write to|Reference|Mention|Offer|Send|Stress|Use|Respond|Tailor|Show|Name)\b/i.test(hook)) {
+    return hook;
+  }
+  return named || tidyText(contact.focus) || contact.company;
+}
+
+function tailoredHeader(contact, language) {
+  const detail = contactDetail(contact);
+  if (language === "cz") {
+    return `U ${contact.company} mě zaujalo tohle: ${detail}.`;
+  }
+  return `At ${contact.company}, this caught my attention: ${detail}.`;
+}
+
 function defaultLanguage(contact) {
   return String(contact.outreach_language || "").toLowerCase().startsWith("czech") ? "cz" : "en";
 }
@@ -292,6 +344,7 @@ function renderMessage() {
   elements.langCz.classList.toggle("is-active", state.language === "cz");
   elements.langEn.classList.toggle("is-active", state.language === "en");
   elements.opening.value = fixedCopy[state.language].header;
+  elements.tailored.value = tailoredHeader(contact, state.language);
   elements.messageTo.value = contact.contact_email || "";
   elements.messageSubject.value = fixedCopy[state.language].subject;
   updatePreview();
@@ -302,9 +355,11 @@ function fullMessage() {
   if (!contact) return "";
   const copy = fixedCopy[state.language];
   const header = elements.opening.value.trim();
+  const tailored = elements.tailored.value.trim();
+  const lead = [header, tailored].filter(Boolean).join("\n\n");
   return `${copy.greeting(contact.company)}
 
-${header}
+${lead}
 
 ${copy.body}`;
 }
@@ -748,12 +803,13 @@ document.querySelectorAll(".filter").forEach((button) => {
 elements.langCz.addEventListener("click", () => changeLanguage("cz"));
 elements.langEn.addEventListener("click", () => changeLanguage("en"));
 elements.opening.addEventListener("input", updatePreview);
+elements.tailored.addEventListener("input", updatePreview);
 elements.messageTo.addEventListener("input", updateMeta);
 elements.messageSubject.addEventListener("input", updateMeta);
 elements.resetMessage.addEventListener("click", renderMessage);
 elements.copyOpening.addEventListener("click", () =>
   copyText(
-    elements.opening.value.trim(),
+    [elements.opening.value.trim(), elements.tailored.value.trim()].filter(Boolean).join("\n\n"),
     state.language === "cz" ? "Hlavička zkopírována" : "Header copied",
     elements.copyOpening,
   ),

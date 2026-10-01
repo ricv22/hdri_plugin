@@ -48,7 +48,7 @@ CONTACTS_LOCK = threading.Lock()
 RESPONSE_LOCK = threading.Lock()
 SESSION_CREDENTIALS: dict[str, str] = {}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-COPY_ID = "vfx-spoluprace-1"
+COPY_ID = "vfx-spoluprace-2"
 MAX_SEND_BYTES = 80_000
 MAX_RESPONSE_CHARS = 12_000
 CONTACT_STATUSES = {"new", "sent", "replied", "won", "lost"}
@@ -83,11 +83,11 @@ def write_standalone_html() -> Path:
     contacts = (ASSETS / "contacts.js").read_text(encoding="utf-8")
     script = (ASSETS / "app.js").read_text(encoding="utf-8")
     html = html.replace(
-        '<link rel="stylesheet" href="styles.css?v=vfx-spoluprace-1">',
+        '<link rel="stylesheet" href="styles.css?v=vfx-spoluprace-2">',
         f"<style>\n{css}\n</style>",
     )
     html = html.replace(
-        '  <script src="contacts.js?v=vfx-spoluprace-1"></script>\n  <script src="app.js?v=vfx-spoluprace-1" defer></script>',
+        '  <script src="contacts.js?v=vfx-spoluprace-2"></script>\n  <script src="app.js?v=vfx-spoluprace-2" defer></script>',
         f"<script>\n{contacts}\n</script>\n<script>\n{script}\n</script>",
     )
     path = HERE / "composer.html"

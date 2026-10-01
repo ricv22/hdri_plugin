@@ -67,13 +67,51 @@ def slug(company: str) -> str:
     return cleaned or "studio"
 
 
+def tidy_text(text: str) -> str:
+    return re.sub(r"\.+$", "", re.sub(r"\s+", " ", text or "")).strip()
+
+
+def contact_detail(row: dict[str, str]) -> str:
+    """One concrete fact about this studio, taken from its own research note."""
+    hook = tidy_text(row.get("personalization_hook", ""))
+    signal = tidy_text(row.get("signal", ""))
+    written = re.match(r"^Write to\s+.+?\.\s+([\s\S]+)$", hook)
+    if written:
+        return tidy_text(written.group(1))
+    named = re.match(r"^(?:Reference|Mention)\s+(.+)$", hook, flags=re.IGNORECASE)
+    thing = ""
+    if named:
+        thing = re.sub(r"\s+and\s+(?:offer|stress|send|mention|use)\b[\s\S]*$", "", named.group(1), flags=re.IGNORECASE)
+        thing = re.sub(r"\s+if\b[\s\S]*$", "", thing, flags=re.IGNORECASE)
+        thing = tidy_text(thing)
+    generic = bool(re.match(r"^(their|its|the|a|an)\s+(hiring|contact|reel|site|studio|work|page)\b", thing, flags=re.IGNORECASE))
+    if thing and not generic:
+        return thing
+    if signal and not re.search(r"neosloveno|osloveno|odpověd|jistota|\+\d{2,}", signal, flags=re.IGNORECASE):
+        return signal
+    if hook and not re.match(r"^(Write to|Reference|Mention|Offer|Send|Stress|Use|Respond|Tailor|Show|Name)\b", hook, flags=re.IGNORECASE):
+        return hook
+    return thing or tidy_text(row.get("focus", "")) or row.get("company", "").strip()
+
+
+def tailored_header(row: dict[str, str]) -> str:
+    company = row["company"].strip()
+    detail = contact_detail(row)
+    if czech_email(row):
+        return f"U {company} mě zaujalo tohle: {detail}."
+    return f"At {company}, this caught my attention: {detail}."
+
+
 def subject_and_body(row: dict[str, str]) -> tuple[str, str]:
     company = row["company"].strip()
+    specific = tailored_header(row)
     if czech_email(row):
         subject = "VFX spolupráce"
         body = f"""Dobrý den,
 
 Píšu vám, protože tvoříte reklamy a spoty, u kterých se 3D a VFX občas hodí.
+
+{specific}
 
 Jsem 3D grafik a produkcím pomáhám externě, když potřebují pokrýt konkrétní záběr nebo jen doplnit kapacitu.
 
@@ -94,6 +132,8 @@ rich.andrys@gmail.com
     body = f"""Hello {company} team,
 
 I'm writing because you make ads and campaigns where 3D and VFX sometimes come in handy.
+
+{specific}
 
 I'm a 3D artist, and I help productions on a freelance basis when they need a specific shot covered, or just some extra capacity.
 
