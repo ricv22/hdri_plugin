@@ -29,6 +29,8 @@ const elements = {
   companyWebsite: document.querySelector("#company-website"),
   companySignal: document.querySelector("#company-signal"),
   companyHook: document.querySelector("#company-hook"),
+  includeHeader: document.querySelector("#include-header"),
+  headerText: document.querySelector("#header-text"),
   openings: document.querySelector("#opening-options"),
   opening: document.querySelector("#opening"),
   langCz: document.querySelector("#lang-cz"),
@@ -134,7 +136,8 @@ function isReplied(contact) {
 
 const fixedCopy = {
   en: {
-    subject: "Freelance 3D / VFX support",
+    subject: "VFX collaboration",
+    header: "I'm writing because you make ads and campaigns where 3D and VFX sometimes come in handy.",
     greeting: (company) => `Hello ${company} team,`,
     body: `I'm a 3D artist, and I help productions on a freelance basis when they need a specific shot covered, or just some extra capacity.
 
@@ -150,7 +153,8 @@ Richard Andrýs
 rich.andrys@gmail.com`,
   },
   cz: {
-    subject: "Externí spolupráce – 3D grafik / VFX",
+    subject: "VFX spolupráce",
+    header: "Píšu vám, protože tvoříte reklamy a spoty, u kterých se 3D a VFX občas hodí.",
     greeting: () => "Dobrý den,",
     body: `Jsem 3D grafik a produkcím pomáhám externě, když potřebují pokrýt konkrétní záběr nebo jen doplnit kapacitu.
 
@@ -328,6 +332,7 @@ function renderMessage() {
 
   elements.langCz.classList.toggle("is-active", state.language === "cz");
   elements.langEn.classList.toggle("is-active", state.language === "en");
+  elements.headerText.textContent = fixedCopy[state.language].header;
   const suggestions = openingSuggestions(contact, state.language);
   const selectedOpening = suggestions[state.openingIndex] || suggestions[0];
 
@@ -360,9 +365,11 @@ function fullMessage() {
   if (!contact) return "";
   const copy = fixedCopy[state.language];
   const opening = elements.opening.value.trim();
+  const header = elements.includeHeader.checked ? copy.header : "";
+  const lead = [header, opening].filter(Boolean).join("\n\n");
   return `${copy.greeting(contact.company)}
 
-${opening}
+${lead}
 
 ${copy.body}`;
 }
@@ -808,6 +815,7 @@ document.querySelectorAll(".filter").forEach((button) => {
 
 elements.langCz.addEventListener("click", () => changeLanguage("cz"));
 elements.langEn.addEventListener("click", () => changeLanguage("en"));
+elements.includeHeader.addEventListener("change", updatePreview);
 elements.opening.addEventListener("input", updatePreview);
 elements.messageTo.addEventListener("input", updateMeta);
 elements.messageSubject.addEventListener("input", updateMeta);

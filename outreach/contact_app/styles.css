@@ -567,10 +567,29 @@ dd a { text-decoration-color: var(--acid); }
   background: var(--acid);
 }
 
+.optional-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  margin-top: 20px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.optional-header input { accent-color: var(--acid); margin-top: 3px; }
+
+.optional-header .eyebrow { display: block; }
+
 .opening-options {
   display: grid;
   gap: 8px;
-  margin: 20px 0 16px;
+  margin: 16px 0;
 }
 
 .opening-option {

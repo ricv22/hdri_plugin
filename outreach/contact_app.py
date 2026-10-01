@@ -455,6 +455,9 @@ def message_timestamp(value: str) -> datetime:
 
 
 OUTREACH_SUBJECT_MARKERS = (
+    "vfx collaboration",
+    "vfx spolupráce",
+    "vfx spoluprace",
     "freelance 3d",
     "vfx support",
     "3d grafik",

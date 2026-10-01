@@ -71,7 +71,7 @@ def subject_and_body(row: dict[str, str]) -> tuple[str, str]:
     company = row["company"].strip()
     focus = row["focus"].strip().rstrip(".")
     if czech_email(row):
-        subject = "Externí spolupráce – 3D grafik"
+        subject = "VFX spolupráce"
         body = f"""Dobrý den,
 
 píšu vám, protože se věnujete oblasti {focus}.
@@ -91,7 +91,7 @@ rich.andrys@gmail.com
 """
         return subject, body
 
-    subject = "Freelance 3D / VFX support"
+    subject = "VFX collaboration"
     body = f"""Hello {company} team,
 
 I'm writing because of your work in {focus}.
